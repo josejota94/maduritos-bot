@@ -14,8 +14,24 @@ RADIO_MAXIMO_KM = float(os.getenv("RADIO_MAXIMO_KM", "4.0"))
 PEDIDO_MINIMO_UNIDADES = int(os.getenv("PEDIDO_MINIMO_UNIDADES", "3"))
 
 PRECIOS = {"estandar": 3.00, "grande": 4.00}
-RELLENOS = ["queso", "mani", "chicharron", "combinado"]
-RELLENOS_TITULOS = {"queso": "Queso", "mani": "Maní", "chicharron": "Chicharrón", "combinado": "Combinado"}
+
+# Sabores base y TODAS las combinaciones posibles entre ellos (dobles + la triple).
+# El precio es el mismo de siempre (según tamaño), combinar sabores no tiene costo extra.
+_SABORES_BASE = ["queso", "mani", "chicharron"]
+RELLENOS = [
+    "queso", "mani", "chicharron",
+    "queso_mani", "queso_chicharron", "mani_chicharron",
+    "combinado",
+]
+RELLENOS_TITULOS = {
+    "queso": "Queso",
+    "mani": "Maní",
+    "chicharron": "Chicharrón",
+    "queso_mani": "Queso + Maní",
+    "queso_chicharron": "Queso + Chicharrón",
+    "mani_chicharron": "Maní + Chicharrón",
+    "combinado": "Combinado (Queso + Maní + Chicharrón)",
+}
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "pedidos_maduritos.db")
 
@@ -111,6 +127,32 @@ def _valor_opcion(texto_o_id: str, prefijo: str) -> str:
     return v
 
 
+def _detectar_relleno(texto_o_id: str):
+    """
+    Reconoce el relleno elegido, ya sea:
+    - un id de la lista de WhatsApp (ej. 'rel_queso_mani' -> 'queso_mani'), o
+    - texto libre escrito a mano (ej. 'queso y mani', 'los 3', 'combinado', 'todo').
+    Devuelve el valor canónico (una key de RELLENOS) o None si no se reconoce nada.
+    """
+    v = _valor_opcion(texto_o_id or "", "rel_")
+    if v in RELLENOS:
+        return v
+
+    if v in ("combinado", "todo", "todos", "los3", "los 3", "de todo"):
+        return "combinado"
+
+    presentes = [s for s in _SABORES_BASE if s in v or (s == "mani" and "man" in v)]
+    if len(presentes) >= 3:
+        return "combinado"
+    if len(presentes) == 2:
+        # Orden fijo para que coincida con las keys de RELLENOS_TITULOS
+        presentes.sort(key=_SABORES_BASE.index)
+        return "_".join(presentes)
+    if len(presentes) == 1:
+        return presentes[0]
+    return None
+
+
 def _get_sesion(telefono):
     cursor.execute(
         "SELECT telefono, nombre, paso, cantidad_total, unidad_actual, tamano_pendiente, carrito "
@@ -190,8 +232,10 @@ def _resumen_carrito(carrito):
 MENU_INTRO = (
     "¡Hola{saludo}! Bienvenido a *Maduritos Asados* 🍌🔥\n\n"
     "*Carta:*\n"
-    "- Estándar (Queso, Maní, Chicharrón, Combinado): S/ 3.00\n"
-    "- Grande (Queso, Maní, Chicharrón, Combinado): S/ 4.00\n\n"
+    "- Estándar: S/ 3.00\n"
+    "- Grande: S/ 4.00\n"
+    "_Sabores: Queso, Maní, Chicharrón — o cualquier combinación entre ellos "
+    "(2 sabores, o los 3 juntos), sin costo extra._\n\n"
     f"*Condición:* pedido mínimo de {PEDIDO_MINIMO_UNIDADES} unidades para delivery.\n\n"
     "_Escribe *cancelar* en cualquier momento para reiniciar tu pedido._"
 )
@@ -269,8 +313,8 @@ def procesar_mensaje(telefono: str, nombre: str, tipo: str, texto: str = None, l
 
     # --- Paso 2b: relleno del maduro actual ---
     if paso == "esperando_relleno":
-        valor = _valor_opcion(texto or "", "rel_")
-        if valor not in RELLENOS:
+        valor = _detectar_relleno(texto)
+        if not valor:
             resp = _pedir_relleno(sesion["unidad_actual"], sesion["cantidad_total"], sesion["tamano_pendiente"])
             resp["texto"] = "No entendí ese relleno. " + resp["texto"]
             return resp
