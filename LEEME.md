@@ -3,7 +3,9 @@
 Esta aplicación:
 - Recibe pedidos (por ahora simulados, más adelante por WhatsApp real).
 - Exige un mínimo de 3 maduritos.
-- Calcula el precio automáticamente (Estándar S/ 3.00 / Grande S/ 4.00).
+- Calcula el precio automáticamente (Mediano S/ 3.00 / Grande S/ 4.00 / Relleno Extra S/ 5.00).
+- Permite combinar sabores en un mismo maduro (Queso, Maní, Chicharrón, o cualquier
+  combinación entre ellos), sin costo extra.
 - Verifica que la dirección del cliente esté dentro de tu zona de reparto (por GPS).
 - Guarda todo en una base de datos (`pedidos_maduritos.db`).
 - Tiene un panel para tu repartidor (ver pedidos, abrir Google Maps, marcar "Entregado").

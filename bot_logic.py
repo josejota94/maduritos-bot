@@ -13,7 +13,8 @@ LON_LOCAL = float(os.getenv("LON_LOCAL", "-76.9700"))
 RADIO_MAXIMO_KM = float(os.getenv("RADIO_MAXIMO_KM", "4.0"))
 PEDIDO_MINIMO_UNIDADES = int(os.getenv("PEDIDO_MINIMO_UNIDADES", "3"))
 
-PRECIOS = {"estandar": 3.00, "grande": 4.00}
+PRECIOS = {"mediano": 3.00, "grande": 4.00, "relleno_extra": 5.00}
+TAMANOS_TITULOS = {"mediano": "Mediano", "grande": "Grande", "relleno_extra": "Relleno Extra"}
 
 # Sabores base y TODAS las combinaciones posibles entre ellos (dobles + la triple).
 # El precio es el mismo de siempre (según tamaño), combinar sabores no tiene costo extra.
@@ -199,7 +200,11 @@ def _borrar_sesion(telefono):
 
 
 def _opciones_tamano():
-    return [("tam_estandar", "Estándar (S/ 3.00)"), ("tam_grande", "Grande (S/ 4.00)")]
+    return [
+        ("tam_mediano", "Mediano (S/ 3.00)"),
+        ("tam_grande", "Grande (S/ 4.00)"),
+        ("tam_relleno_extra", "Relleno Extra (S/ 5.00)"),
+    ]
 
 
 def _opciones_relleno():
@@ -214,7 +219,7 @@ def _pedir_tamano(unidad_actual, cantidad_total):
 
 
 def _pedir_relleno(unidad_actual, cantidad_total, tamano):
-    nombre_tam = "Estándar" if tamano == "estandar" else "Grande"
+    nombre_tam = TAMANOS_TITULOS.get(tamano, tamano)
     return _lista(
         f"Maduro {unidad_actual}/{cantidad_total} ({nombre_tam}) — elige el relleno:",
         _opciones_relleno(),
@@ -224,7 +229,7 @@ def _pedir_relleno(unidad_actual, cantidad_total, tamano):
 
 def _resumen_carrito(carrito):
     return "\n".join(
-        f"- {('Estándar' if c['tamano']=='estandar' else 'Grande')} {RELLENOS_TITULOS[c['relleno']]} (S/ {c['precio']:.2f})"
+        f"- {TAMANOS_TITULOS.get(c['tamano'], c['tamano'])} {RELLENOS_TITULOS[c['relleno']]} (S/ {c['precio']:.2f})"
         for c in carrito
     )
 
@@ -232,8 +237,9 @@ def _resumen_carrito(carrito):
 MENU_INTRO = (
     "¡Hola{saludo}! Bienvenido a *Maduritos Asados* 🍌🔥\n\n"
     "*Carta:*\n"
-    "- Estándar: S/ 3.00\n"
+    "- Mediano: S/ 3.00\n"
     "- Grande: S/ 4.00\n"
+    "- Relleno Extra: S/ 5.00 🔥\n"
     "_Sabores: Queso, Maní, Chicharrón — o cualquier combinación entre ellos "
     "(2 sabores, o los 3 juntos), sin costo extra._\n\n"
     f"*Condición:* pedido mínimo de {PEDIDO_MINIMO_UNIDADES} unidades para delivery.\n\n"
