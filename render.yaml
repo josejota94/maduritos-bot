@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: maduritos-bot
+    env: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: LAT_LOCAL
+        value: "-6.0350"
+      - key: LON_LOCAL
+        value: "-76.9700"
+      - key: RADIO_MAXIMO_KM
+        value: "4.0"
+      - key: PEDIDO_MINIMO_UNIDADES
+        value: "3"
+      - key: VERIFY_TOKEN
+        value: "TOKEN_SECRETO_WEBHOOK"
+      - key: WHATSAPP_TOKEN
+        value: ""
+      - key: PHONE_NUMBER_ID
+        value: ""
