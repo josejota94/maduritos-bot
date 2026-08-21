@@ -459,6 +459,144 @@ def reporte_por_periodo(periodo: str = "dia"):
     }
 
 
+def pedidos_detallados_periodo(periodo: str = "dia"):
+    """Detalle fila por fila de los pedidos ENTREGADOS de un periodo (para exportar)."""
+    condiciones = {
+        "dia": "date(fecha) = date('now')",
+        "semana": "date(fecha) >= date('now', '-6 days')",
+        "mes": "strftime('%Y-%m', fecha) = strftime('%Y-%m', 'now')",
+    }
+    condicion = condiciones.get(periodo, condiciones["dia"])
+    cursor.execute(
+        f"""
+        SELECT id, cliente_nombre, telefono, detalle, total_unidades, monto_total, fecha
+        FROM pedidos WHERE estado = 'ENTREGADO' AND {condicion}
+        ORDER BY fecha ASC
+        """
+    )
+    filas = cursor.fetchall()
+    return [
+        {
+            "id": f[0], "cliente_nombre": f[1] or "Sin nombre", "telefono": f[2],
+            "detalle": f[3], "total_unidades": f[4], "monto_total": f[5], "fecha": f[6],
+        }
+        for f in filas
+    ]
+
+
+def generar_excel_reporte(periodo: str = "dia") -> bytes:
+    from io import BytesIO
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    pedidos = pedidos_detallados_periodo(periodo)
+    resumen = reporte_por_periodo(periodo)
+    etiquetas = {"dia": "Hoy", "semana": "Últimos 7 días", "mes": "Este mes"}
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Reporte de Caja"
+
+    titulo_font = Font(name="Arial", size=14, bold=True, color="FFFFFF")
+    titulo_fill = PatternFill("solid", fgColor="00A884")
+    encabezado_font = Font(name="Arial", size=11, bold=True, color="FFFFFF")
+    encabezado_fill = PatternFill("solid", fgColor="2E7D32")
+
+    ws.merge_cells("A1:F1")
+    ws["A1"] = f"Maduritos Asados — Cierre de Caja ({etiquetas.get(periodo, periodo)})"
+    ws["A1"].font = titulo_font
+    ws["A1"].fill = titulo_fill
+    ws["A1"].alignment = Alignment(horizontal="center")
+
+    ws["A3"] = "Total recaudado (S/)"
+    ws["B3"] = resumen["total_recaudado_soles"]
+    ws["A4"] = "Maduritos vendidos"
+    ws["B4"] = resumen["maduritos_vendidos"]
+    ws["A5"] = "Pedidos entregados"
+    ws["B5"] = resumen["pedidos_entregados"]
+    for fila in (3, 4, 5):
+        ws[f"A{fila}"].font = Font(name="Arial", bold=True)
+
+    encabezados = ["ID", "Cliente", "Teléfono", "Detalle", "Maduritos", "Monto (S/)", "Fecha"]
+    fila_encabezado = 7
+    for col, titulo in enumerate(encabezados, start=1):
+        celda = ws.cell(row=fila_encabezado, column=col, value=titulo)
+        celda.font = encabezado_font
+        celda.fill = encabezado_fill
+
+    for i, p in enumerate(pedidos, start=fila_encabezado + 1):
+        ws.cell(row=i, column=1, value=p["id"])
+        ws.cell(row=i, column=2, value=p["cliente_nombre"])
+        ws.cell(row=i, column=3, value=p["telefono"])
+        ws.cell(row=i, column=4, value=p["detalle"])
+        ws.cell(row=i, column=5, value=p["total_unidades"])
+        ws.cell(row=i, column=6, value=p["monto_total"])
+        ws.cell(row=i, column=7, value=p["fecha"])
+
+    anchos = [6, 18, 16, 40, 11, 12, 20]
+    for col, ancho in enumerate(anchos, start=1):
+        ws.column_dimensions[chr(64 + col)].width = ancho
+
+    buffer = BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    return buffer.read()
+
+
+def generar_pdf_reporte(periodo: str = "dia") -> bytes:
+    from io import BytesIO
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib import colors
+    from reportlab.lib.units import cm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet
+
+    pedidos = pedidos_detallados_periodo(periodo)
+    resumen = reporte_por_periodo(periodo)
+    etiquetas = {"dia": "Hoy", "semana": "Últimos 7 días", "mes": "Este mes"}
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=1.5 * cm, bottomMargin=1.5 * cm)
+    estilos = getSampleStyleSheet()
+    elementos = []
+
+    elementos.append(Paragraph(
+        f"<b>Maduritos Asados</b> — Cierre de Caja ({etiquetas.get(periodo, periodo)})",
+        estilos["Title"],
+    ))
+    elementos.append(Spacer(1, 12))
+    elementos.append(Paragraph(
+        f"Total recaudado: <b>S/ {resumen['total_recaudado_soles']:.2f}</b> &nbsp;&nbsp; "
+        f"Maduritos vendidos: <b>{resumen['maduritos_vendidos']}</b> &nbsp;&nbsp; "
+        f"Pedidos entregados: <b>{resumen['pedidos_entregados']}</b>",
+        estilos["Normal"],
+    ))
+    elementos.append(Spacer(1, 16))
+
+    datos = [["ID", "Cliente", "Teléfono", "Detalle", "Uds", "Monto", "Fecha"]]
+    for p in pedidos:
+        datos.append([
+            str(p["id"]), p["cliente_nombre"], p["telefono"],
+            Paragraph(p["detalle"], estilos["Normal"]),
+            str(p["total_unidades"]), f"S/ {p['monto_total']:.2f}", p["fecha"],
+        ])
+
+    tabla = Table(datos, colWidths=[1.3 * cm, 3 * cm, 2.8 * cm, 6.5 * cm, 1.3 * cm, 2.2 * cm, 3 * cm], repeatRows=1)
+    tabla.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2E7D32")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F5F5F5")]),
+    ]))
+    elementos.append(tabla)
+
+    doc.build(elementos)
+    buffer.seek(0)
+    return buffer.read()
+
+
 def pedidos_pendientes():
     cursor.execute(
         """

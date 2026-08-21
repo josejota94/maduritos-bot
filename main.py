@@ -3,7 +3,7 @@ import os
 import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, Query, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 import bot_logic as bl
 
@@ -405,6 +405,26 @@ def reporte_caja(periodo: str = Query("dia", description="dia, semana o mes")):
     return bl.reporte_por_periodo(periodo)
 
 
+@app.get("/caja/exportar.xlsx")
+def exportar_caja_excel(periodo: str = Query("dia")):
+    contenido = bl.generar_excel_reporte(periodo)
+    return StreamingResponse(
+        iter([contenido]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="caja_{periodo}.xlsx"'},
+    )
+
+
+@app.get("/caja/exportar.pdf")
+def exportar_caja_pdf(periodo: str = Query("dia")):
+    contenido = bl.generar_pdf_reporte(periodo)
+    return StreamingResponse(
+        iter([contenido]),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="caja_{periodo}.pdf"'},
+    )
+
+
 @app.get("/caja", response_class=HTMLResponse)
 def caja_html(periodo: str = Query("dia")):
     data = bl.reporte_por_periodo(periodo)
@@ -427,6 +447,10 @@ def caja_html(periodo: str = Query("dia")):
             .num {{ font-size:32px; font-weight:bold; color:#2e7d32; }}
             .label {{ color:#666; font-size:14px; margin-bottom:18px; }}
             .botones {{ max-width:380px; margin:0 auto 16px auto; }}
+            .exportar {{ max-width:380px; margin:16px auto 0 auto; display:flex; gap:10px; }}
+            .exportar a {{ flex:1; text-align:center; text-decoration:none; padding:12px; border-radius:10px; font-size:14px; font-weight:bold; }}
+            .btn-excel {{ background:#1d6f42; color:#fff; }}
+            .btn-pdf {{ background:#c0392b; color:#fff; }}
         </style>
     </head>
     <body>
@@ -440,6 +464,10 @@ def caja_html(periodo: str = Query("dia")):
             <div class="label">Maduritos vendidos</div>
             <div class="num">{data['pedidos_entregados']}</div>
             <div class="label">Pedidos entregados</div>
+            <div class="exportar">
+                <a class="btn-excel" href="/caja/exportar.xlsx?periodo={periodo}">⬇️ Excel</a>
+                <a class="btn-pdf" href="/caja/exportar.pdf?periodo={periodo}">⬇️ PDF</a>
+            </div>
         </div>
     </body>
     </html>
