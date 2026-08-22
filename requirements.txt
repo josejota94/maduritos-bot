@@ -6,4 +6,3 @@ openpyxl
 reportlab
 pywebpush
 psycopg2-binary
-nodejs-bin[cmd]==18.4.0a4

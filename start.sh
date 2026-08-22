@@ -3,7 +3,10 @@
 # y el servidor principal (FastAPI) en primer plano.
 set -e
 
+export PATH="$(pwd)/node20/bin:$PATH"
+
 echo "🍌 Iniciando Maduritos Asados..."
+echo "Versión de Node: $(node --version)"
 
 node whatsapp_qr.js &
 
