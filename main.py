@@ -452,15 +452,19 @@ def app_repartidor():
 
             function tarjetaHTML(p) {
                 let nombreReal = p.cliente_nombre;
-                // Por defecto intenta usar el ID base
-                let telLimpio = p.telefono.split('@')[0];
+                let telLimpio = p.telefono.split('@')[0]; // Por defecto usa el ID base
+                let celParaLlamada = telLimpio;
+                let celParaWA = telLimpio;
                 
-                // Si el bot nos mandó el formato "Nombre | Numero"
+                // Si el bot mandó el número validado
                 if (p.cliente_nombre.includes(" | ")) {
                     const partes = p.cliente_nombre.split(" | ");
                     nombreReal = partes[0];
-                    // Quitamos letras o espacios por si escribió "mi cel es 999..."
-                    telLimpio = partes[1].replace(/[^0-9]/g, '');
+                    telLimpio = partes[1].trim(); 
+                    
+                    // Configuramos para Perú
+                    celParaLlamada = telLimpio; // Llamada celular normal (ej: 987654321)
+                    celParaWA = "51" + telLimpio; // WhatsApp exige el código de país (ej: 51987654321)
                 }
 
                 return `
@@ -472,14 +476,22 @@ def app_repartidor():
                     <p style="margin:8px 0; color:#555;">
                         <strong>Cliente:</strong> ${nombreReal} <br>
                         <strong>Celular:</strong> ${telLimpio} 
-                        (<a href="tel:+${telLimpio}" style="color:#00a884; font-weight:bold; text-decoration:none;">☎️ Llamar</a>)
                     </p>
                     <p style="margin:8px 0; color:#555; white-space: pre-wrap;"><strong>Pedido:</strong>\n${p.detalle}</p>
                     <p style="margin:8px 0; color:#777; font-size:14px;">Distancia: ${p.distancia_km} km · ${p.fecha}</p>
+                    
                     <div class="acciones">
+                        <!-- El botón Maps -->
                         <a class="maps" href="${p.maps_url}" target="_blank">📍 Maps</a>
-                        <a class="maps" href="https://wa.me/${telLimpio}" target="_blank" style="background:#25D366;">💬 WhatsApp</a>
-                        <button class="entregar" onclick="entregar(${p.id})">✅ Entregado</button>
+                        
+                        <!-- Llama por la línea del operador móvil (tel:) -->
+                        <a class="maps" href="tel:${celParaLlamada}" style="background:#007bff;">☎️ Llamar</a>
+                        
+                        <!-- Escribe por WhatsApp (wa.me) -->
+                        <a class="maps" href="https://wa.me/${celParaWA}" target="_blank" style="background:#25D366;">💬 Escribir</a>
+                    </div>
+                    <div class="acciones" style="margin-top:8px;">
+                        <button class="entregar" onclick="entregar(${p.id})" style="width:100%;">✅ Marcar como Entregado</button>
                     </div>
                 </div>`;
             }
