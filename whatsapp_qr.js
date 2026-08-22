@@ -8,7 +8,7 @@ if (typeof global.crypto === 'undefined') {
     global.crypto = require('crypto').webcrypto;
 }
 
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const qrcodeTerminal = require('qrcode-terminal');
 const qrcodeImagen = require('qrcode');
 const axios = require('axios');
@@ -23,9 +23,12 @@ if (!fs.existsSync(CARPETA_STATIC)) fs.mkdirSync(CARPETA_STATIC, { recursive: tr
 
 async function iniciarBot() {
     const { state, saveCreds } = await useMultiFileAuthState('sesion_whatsapp');
+    const { version } = await fetchLatestBaileysVersion();
+    console.log('Usando versión de WhatsApp Web:', version.join('.'));
 
     const sock = makeWASocket({
         auth: state,
+        version,
         printQRInTerminal: false, // usamos qrcode-terminal manualmente para verlo más grande
     });
 
@@ -46,8 +49,8 @@ async function iniciarBot() {
         if (connection === 'close') {
             const codigo = lastDisconnect?.error?.output?.statusCode;
             const debeReconectar = codigo !== DisconnectReason.loggedOut;
-            console.log('❌ Conexión cerrada.', debeReconectar ? 'Reintentando...' : 'Sesión cerrada (borra la carpeta sesion_whatsapp y vuelve a escanear el QR).');
-            if (debeReconectar) iniciarBot();
+            console.log('❌ Conexión cerrada.', debeReconectar ? 'Reintentando en 5s...' : 'Sesión cerrada (borra la carpeta sesion_whatsapp y vuelve a escanear el QR).');
+            if (debeReconectar) setTimeout(iniciarBot, 5000);
         } else if (connection === 'open') {
             console.log('✅ ¡WhatsApp conectado exitosamente por QR!');
             if (fs.existsSync(RUTA_QR)) fs.unlinkSync(RUTA_QR);
