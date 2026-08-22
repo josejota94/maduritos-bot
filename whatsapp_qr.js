@@ -15,7 +15,12 @@ const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
 
-const URL_PYTHON = 'http://localhost:8000/api/baileys-webhook';
+// Render asigna su propio puerto dinámico (variable PORT) para el servidor
+// Python — no siempre es 8000. Usamos el mismo puerto aquí para que coincidan
+// siempre, tanto en tu compu (donde no hay PORT y usa 8000 por defecto) como
+// en Render.
+const PUERTO_PYTHON = process.env.PORT || 8000;
+const URL_PYTHON = `http://localhost:${PUERTO_PYTHON}/api/baileys-webhook`;
 const CARPETA_STATIC = path.join(__dirname, 'static');
 const RUTA_QR = path.join(CARPETA_STATIC, 'qr_actual.png');
 
