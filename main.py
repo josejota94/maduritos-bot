@@ -17,7 +17,9 @@ VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "TOKEN_SECRETO_WEBHOOK")
 VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")
 
 app = FastAPI(title="Maduritos Asados - Bot de Pedidos")
-app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
+_static_dir = os.path.join(os.path.dirname(__file__), "static")
+os.makedirs(_static_dir, exist_ok=True)  # evita que el servidor no arranque si faltó subir esta carpeta
+app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
 
 # ---------------------------------------------------------------------------
