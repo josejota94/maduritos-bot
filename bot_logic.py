@@ -475,15 +475,32 @@ def procesar_mensaje(telefono: str, nombre: str, tipo: str, texto: str = None, l
         # número de WhatsApp de siempre como número de contacto, no hace falta
         # pedirlo aparte.
         _guardar_sesion(telefono, nombre, "esperando_nombre", cantidad_total=cantidad, unidad_actual=1, carrito=[])
-        return _texto("¿A nombre de quién anotamos el pedido? (para que el repartidor te llame al llegar)")
+        return _texto("¿A nombre de quién anotamos el pedido? ")
 
-    # --- Paso 1b: nombre del cliente (para el repartidor) ---
+    # --- Paso 1b: nombre del cliente ---
     if paso == "esperando_nombre":
         nombre_cliente = (texto or "").strip()
         if not nombre_cliente:
             return _texto("¿A nombre de quién anotamos el pedido?")
+        
+        # Guardamos el nombre y pasamos al nuevo paso del celular
         _guardar_sesion(
-            telefono, nombre_cliente, "esperando_tamano",
+            telefono, nombre_cliente, "esperando_contacto",
+            cantidad_total=sesion["cantidad_total"], unidad_actual=1, carrito=[],
+        )
+        return _texto(f"¡Anotado, {nombre_cliente}! 📱 ¿A qué número de celular puede llamarte o escribirte el repartidor al llegar?")
+
+    # --- NUEVO Paso 1c: número de contacto ---
+    if paso == "esperando_contacto":
+        contacto = (texto or "").strip()
+        if not contacto:
+            return _texto("Por favor, escribe un número de celular para que el repartidor pueda contactarte.")
+        
+        # Juntamos el nombre y el celular separados por " | "
+        nombre_con_celular = f"{sesion['nombre']} | {contacto}"
+        
+        _guardar_sesion(
+            telefono, nombre_con_celular, "esperando_tamano",
             cantidad_total=sesion["cantidad_total"], unidad_actual=1, carrito=[],
         )
         return _pedir_tamano(1, sesion["cantidad_total"])
