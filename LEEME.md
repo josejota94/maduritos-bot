@@ -119,10 +119,11 @@ plan gratuito, suficiente para empezar).
 **Dos cosas a tener en cuenta con el plan gratuito de Render:**
 - Si la app no recibe visitas por un rato, "se duerme" y tarda ~30 segundos en
   despertar la próxima vez que alguien entra (normal, no es un error).
-- Los pedidos guardados pueden perderse si Render reinicia el servidor. Para un
-  negocio real que no puede permitirse perder pedidos, lo ideal es pasar al plan
-  pagado más básico de Render (desde ~USD 7/mes) con un "disco persistente" — puedo
-  ayudarte a configurar eso cuando quieras dar ese paso.
+- **Sobre perder pedidos si Render reinicia:** el plan gratis de Render borra los
+  archivos del servidor en cada reinicio — eso incluye la base de datos si no
+  haces nada más. La sección 8 de abajo explica cómo evitar esto **gratis**
+  (sin pasar a un plan pagado de Render), conectando una base de datos externa
+  gratuita que sí es permanente.
 
 Una vez que tengas esta URL pública, también es el paso previo para conectar el
 WhatsApp real (Meta necesita una URL de internet, no puede apuntar a tu laptop).
@@ -146,16 +147,105 @@ WhatsApp real (Meta necesita una URL de internet, no puede apuntar a tu laptop).
   notificación del navegador) apenas entra un pedido nuevo. La primera vez que abras
   el panel, haz un clic en cualquier parte de la pantalla para "activar" el sonido
   (los navegadores lo exigen por seguridad).
+- **Notificaciones push reales**, aunque el repartidor tenga la pantalla apagada o
+  el navegador cerrado (ver sección 9). El panel también se puede "Agregar a
+  pantalla de inicio" como una app.
 - **Historial de pedidos por cliente** (`/historial`): busca por número de teléfono y
   ve todos sus pedidos anteriores y cuánto ha gastado en total.
 - **Reportes por periodo**: la Caja (`/caja`) ahora tiene pestañas de Hoy / Últimos 7
-  días / Este mes (`/reporte-caja?periodo=dia|semana|mes` en formato JSON).
+  días / Este mes, y botones para descargar el reporte en **Excel** o **PDF**.
 - Simulador de WhatsApp para probar sin necesitar cuenta de Meta.
 - Configuración por archivo `.env` en vez de datos escritos directamente en el código.
+- **Base de datos persistente gratis** (sección 8): tus pedidos no se pierden aunque
+  Render reinicie el servidor, sin pagar nada.
 
-## 7. Ideas para más adelante (dime si quieres que las agregue)
+## 8. Que tus pedidos NUNCA se pierdan (gratis, con Supabase)
 
-- Notificaciones push al celular del repartidor incluso con la pantalla apagada
-  (requiere convertir el panel en una PWA instalable).
-- Reportes descargables en Excel/PDF.
-- Publicar la app en internet 24/7 con almacenamiento persistente (plan pagado de Render).
+Por defecto, la app guarda los pedidos en un archivo (`pedidos_maduritos.db`) dentro
+del propio servidor de Render. El problema: en el plan gratis, Render borra ese
+archivo cada vez que reinicia tu servicio (y lo reinicia seguido: cada vez que se
+"duerme" por falta de visitas, en cada actualización de código, etc.).
+
+La solución gratis es guardar los pedidos en una base de datos aparte, que vive
+fuera de Render y no se borra nunca. Usaremos **Supabase** (tiene un plan gratis
+para siempre, sin tarjeta de crédito).
+
+1. Crea una cuenta gratis en https://supabase.com y crea un nuevo proyecto
+   (ponle un nombre, por ejemplo `maduritos-bot`, y una contraseña — **guárdala**,
+   la necesitas en el paso 3).
+2. Espera 1-2 minutos a que Supabase termine de crear tu base de datos.
+3. En el menú lateral ve a **Project Settings → Database → Connection string**,
+   elige la pestaña **"URI"**, y copia el link (empieza con `postgresql://...`).
+   Reemplaza donde dice `[YOUR-PASSWORD]` por la contraseña que pusiste en el
+   paso 1.
+4. Pega ese link completo en la variable `DATABASE_URL` de tu `.env` (para probar
+   en tu compu) y también en Render: **Dashboard de tu servicio → Environment →
+   Add Environment Variable** → `DATABASE_URL` con ese mismo valor.
+5. Vuelve a desplegar en Render (o simplemente reinicia el servicio). La próxima
+   vez que arranque, la app va a crear las tablas automáticamente en Supabase y
+   usarlas en vez del archivo local. A partir de ahí, tus pedidos quedan guardados
+   ahí para siempre, sin importar cuántas veces Render reinicie.
+
+**Nota:** si dejas `DATABASE_URL` vacío, la app sigue funcionando exactamente
+igual que antes con el archivo local — perfecto para seguir probando en tu compu
+sin depender de internet. Solo necesitas Supabase en tu servidor de producción
+(Render).
+
+**Nota 2:** el plan gratis de Supabase "pausa" el proyecto si pasan 7 días
+*sin ninguna consulta* a la base de datos — algo poco probable si tu negocio
+recibe pedidos regularmente. Si llegara a pasar, entras un momento a tu panel
+de Supabase y le das "Restore/Reanudar" (tus datos no se pierden, solo hay que
+despertarlo).
+
+## 9. Notificaciones push al repartidor (aunque tenga la pantalla apagada)
+
+1. Corre una sola vez en tu compu: `python generar_vapid_keys.py` — te va a dar
+   dos llaves (`VAPID_PUBLIC_KEY` y `VAPID_PRIVATE_KEY`).
+2. Pégalas en tu `.env` (y en Render, en Environment Variables), junto con
+   `VAPID_CLAIM_EMAIL` (cualquier correo tuyo).
+3. Sube también la carpeta `static/` (con los íconos) junto al resto de archivos.
+4. Esto necesita HTTPS para funcionar (con `ngrok` o ya en Render funciona bien;
+   en `http://localhost` sin HTTPS el navegador puede bloquearlo).
+5. El repartidor abre `/repartidor` en su celular, toca el botón
+   "🔔 Activar notificaciones" una vez, acepta el permiso — y desde ahí le
+   suena y vibra el celular con cada pedido nuevo, incluso con la pantalla
+   apagada o el navegador cerrado.
+
+## 11. WhatsApp por código QR corriendo 24/7 (sin dejar tu compu prendida)
+
+Si aún no lograste registrar tu número en la API oficial de Meta (o mientras lo
+resuelves), puedes recibir pedidos reales YA usando WhatsApp por código QR
+(Baileys) — y hacer que corra en Render, no en tu computadora.
+
+1. Sube también estos 3 archivos nuevos a GitHub (junto a los demás):
+   `whatsapp_qr.js`, `package.json`, `start.sh`.
+2. En Render no necesitas cambiar nada manualmente — el `render.yaml` ya quedó
+   actualizado para instalar Node.js (via `nodejs-bin`, un paquete de Python que
+   trae Node incluido) y arrancar los dos programas juntos.
+3. Espera a que el deploy diga "Live". Luego ve a la pestaña **Logs** de tu
+   servicio en Render — ahí, entre el texto, va a aparecer el código QR (hecho
+   de caracteres, como en tu terminal local). Escanéalo con el WhatsApp de tu
+   celular: **Configuración → Dispositivos vinculados → Vincular un
+   dispositivo**.
+4. Listo — desde ahí corre solo, sin tu computadora, aunque cierres el
+   navegador.
+
+**Sobre que Render "se duerma":** el plan gratis apaga tu servicio si no recibe
+visitas por 15 minutos, lo que cortaría la conexión de WhatsApp. Para evitarlo,
+gratis, usa un "pinger": entra a https://uptimerobot.com, crea una cuenta
+gratis, "Add New Monitor" → tipo HTTP(s) → pega tu URL de Render
+(`https://maduritos-bot.onrender.com`) → intervalo de 5 minutos → Crear. Eso le
+manda una visita cada 5 minutos y Render nunca lo deja dormir.
+
+**Limitación a saber:** cada vez que subas una actualización de código (un
+nuevo deploy), la sesión de WhatsApp se desconecta y hay que volver a escanear
+el QR desde los Logs — Render no guarda esa sesión de forma permanente en el
+plan gratis. Para el día a día (sin subir cambios de código) debería quedarse
+conectado de forma continua gracias al pinger.
+
+## 12. Ideas para más adelante (dime si quieres que las agregue)
+
+- App nativa de verdad (en vez de PWA) para el repartidor.
+- Integración con pasarela de pagos (Yape/Plin/tarjeta) para cobrar por adelantado.
+- Panel de administrador para editar precios y sabores sin tocar código.
+

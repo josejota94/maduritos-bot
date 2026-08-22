@@ -4,3 +4,6 @@ requests
 python-dotenv
 openpyxl
 reportlab
+pywebpush
+psycopg2-binary
+nodejs-bin[cmd]

@@ -1,0 +1,14 @@
+{
+  "name": "maduritos-baileys",
+  "version": "1.0.0",
+  "description": "Conexión de WhatsApp por código QR (Baileys) para Maduritos Asados",
+  "main": "whatsapp_qr.js",
+  "scripts": {
+    "start": "node whatsapp_qr.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.9",
+    "axios": "^1.7.7",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

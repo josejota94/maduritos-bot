@@ -3,8 +3,8 @@ services:
     name: maduritos-bot
     env: python
     plan: free
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
+    buildCommand: "pip install -r requirements.txt && npm install && chmod +x start.sh"
+    startCommand: "bash start.sh"
     envVars:
       - key: LAT_LOCAL
         value: "-6.0350"
@@ -20,3 +20,11 @@ services:
         value: ""
       - key: PHONE_NUMBER_ID
         value: ""
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_CLAIM_EMAIL
+        value: "mailto:tu_correo@ejemplo.com"
+      - key: DATABASE_URL
+        sync: false
