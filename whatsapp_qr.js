@@ -94,6 +94,25 @@ async function enviarRespuesta(sock, jid, respuesta) {
     }
 }
 
+// Deduplicación de mensajes: Baileys a veces reentrega el mismo mensaje
+// (típico al reconectar), y si se procesa 2 veces, el pedido "avanza solo"
+// un paso de más con una sola respuesta del cliente — eso se sentía como
+// que "no marcaba nada" o el chat se descuadraba. Guardamos los últimos IDs
+// de mensaje ya procesados y saltamos los repetidos.
+const _idsYaProcesados = new Set();
+const _ordenIds = [];
+function _yaSeProceso(idMensaje) {
+    if (!idMensaje) return false;
+    if (_idsYaProcesados.has(idMensaje)) return true;
+    _idsYaProcesados.add(idMensaje);
+    _ordenIds.push(idMensaje);
+    if (_ordenIds.length > 500) {
+        const viejo = _ordenIds.shift();
+        _idsYaProcesados.delete(viejo);
+    }
+    return false;
+}
+
 async function iniciarBot() {
     const { state, saveCreds } = await useMultiFileAuthState('sesion_whatsapp');
     const { version } = await fetchLatestBaileysVersion();
@@ -137,6 +156,7 @@ async function iniciarBot() {
         const msg = messages[0];
         if (!msg.message || msg.key.fromMe) return;
         if (msg.key.remoteJid?.endsWith('@g.us')) return;
+        if (_yaSeProceso(msg.key.id)) return;
 
         const jid = msg.key.remoteJid;
         const telefono = jid.replace('@s.whatsapp.net', '');
