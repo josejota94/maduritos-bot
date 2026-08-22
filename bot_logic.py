@@ -148,6 +148,24 @@ _CONFIRMAR_PALABRAS = {"confirmar_pedido", "confirmar", "confirmo", "si", "sí",
 _CANCELAR_PALABRAS = {"cancelar_pedido", "cancelar", "cancelo", "no", "n", "cancela"}
 
 
+def _resolver_por_posicion(texto_o_id: str, opciones):
+    """
+    Si el cliente responde con un número suelto (ej. '2') que coincide con
+    la POSICIÓN de una de las opciones que se le mostraron (ej. la 2da de la
+    lista), lo traduce al id real de esa opción (ej. 'tam_grande').
+    Necesario porque, por WhatsApp-QR, las opciones a veces solo se pueden
+    mostrar como texto numerado ("1. Mediano / 2. Grande / ..."), y sin esto
+    el cliente escribe "2" y el bot no lo reconoce — repite la pregunta en
+    bucle en vez de avanzar.
+    """
+    crudo = (texto_o_id or "").strip()
+    if crudo.isdigit():
+        idx = int(crudo) - 1
+        if 0 <= idx < len(opciones):
+            return opciones[idx][0]
+    return texto_o_id
+
+
 def _detectar_confirmacion(texto_o_id: str):
     """Devuelve 'confirmar', 'cancelar' o None. Acepta el id del botón o
     sinónimos comunes escritos a mano ('si', 'sí', 'ok', 'no', ...)."""
@@ -428,7 +446,7 @@ def procesar_mensaje(telefono: str, nombre: str, tipo: str, texto: str = None, l
 
     # --- Paso 2a: tamaño del maduro actual ---
     if paso == "esperando_tamano":
-        valor = _detectar_tamano(texto)
+        valor = _detectar_tamano(_resolver_por_posicion(texto, _opciones_tamano()))
         if not valor:
             resp = _pedir_tamano(sesion["unidad_actual"], sesion["cantidad_total"])
             resp["texto"] = "No entendí esa opción. " + resp["texto"]
@@ -442,7 +460,7 @@ def procesar_mensaje(telefono: str, nombre: str, tipo: str, texto: str = None, l
 
     # --- Paso 2b: relleno del maduro actual ---
     if paso == "esperando_relleno":
-        valor = _detectar_relleno(texto)
+        valor = _detectar_relleno(_resolver_por_posicion(texto, _opciones_relleno()))
         if not valor:
             resp = _pedir_relleno(sesion["unidad_actual"], sesion["cantidad_total"], sesion["tamano_pendiente"])
             resp["texto"] = "No entendí ese relleno. " + resp["texto"]
@@ -474,7 +492,8 @@ def procesar_mensaje(telefono: str, nombre: str, tipo: str, texto: str = None, l
 
     # --- Paso 3: confirmación antes de pedir ubicación ---
     if paso == "esperando_confirmacion":
-        decision = _detectar_confirmacion(texto)
+        opciones_confirmacion = [("confirmar_pedido", "✅ Confirmar"), ("cancelar_pedido", "❌ Cancelar")]
+        decision = _detectar_confirmacion(_resolver_por_posicion(texto, opciones_confirmacion))
         if decision == "cancelar":
             _borrar_sesion(telefono)
             return _texto("Tu pedido fue cancelado. Escribe cualquier mensaje para empezar de nuevo. 🙂")
