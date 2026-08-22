@@ -11,7 +11,18 @@ import unicodedata
 LAT_LOCAL = float(os.getenv("LAT_LOCAL", "-6.0350"))
 LON_LOCAL = float(os.getenv("LON_LOCAL", "-76.9700"))
 RADIO_MAXIMO_KM = float(os.getenv("RADIO_MAXIMO_KM", "4.0"))
-PEDIDO_MINIMO_UNIDADES = int(os.getenv("PEDIDO_MINIMO_UNIDADES", "3"))
+def _entero_env(nombre_var: str, valor_por_defecto: int) -> int:
+    """Lee una variable de entorno como número entero, tolerando que alguien
+    haya puesto sin querer un valor con decimales (ej. '3.5') — lo redondea
+    en vez de tumbar el servidor al arrancar."""
+    crudo = os.getenv(nombre_var, str(valor_por_defecto))
+    try:
+        return int(float(crudo))
+    except (TypeError, ValueError):
+        return valor_por_defecto
+
+
+PEDIDO_MINIMO_UNIDADES = _entero_env("PEDIDO_MINIMO_UNIDADES", 3)
 DIRECCION_LOCAL = os.getenv("DIRECCION_LOCAL", "Jr. Lima cuadra 4, frente al Banco BCP")
 
 PRECIOS = {"mediano": 3.00, "grande": 4.00, "relleno_extra": 5.00}
