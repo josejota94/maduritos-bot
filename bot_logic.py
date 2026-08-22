@@ -729,7 +729,6 @@ def reporte_por_periodo(periodo: str = "dia"):
 
 
 def pedidos_detallados_periodo(periodo: str = "dia"):
-    """Detalle fila por fila de los pedidos ENTREGADOS de un periodo (para exportar)."""
     condiciones = {
         "dia": "date(fecha) = CURRENT_DATE",
         "semana": "date(fecha) >= CURRENT_DATE - INTERVAL '6 days'",
@@ -745,13 +744,29 @@ def pedidos_detallados_periodo(periodo: str = "dia"):
             """
         )
         filas = cursor.fetchall()
-    return [
-        {
-            "id": f[0], "cliente_nombre": f[1] or "Sin nombre", "telefono": f[2],
-            "detalle": f[3], "total_unidades": f[4], "monto_total": f[5], "fecha": f[6],
-        }
-        for f in filas
-    ]
+        
+    resultado = []
+    for f in filas:
+        nombre_db = f[1] or "Sin nombre"
+        tel_db = f[2] or ""
+        
+        # Limpiamos si viene con el formato "Nombre | Celular"
+        if " | " in nombre_db:
+            partes = nombre_db.split(" | ")
+            nombre_limpio = partes[0]
+            tel_limpio = partes[1].strip()
+        else:
+            nombre_limpio = nombre_db
+            tel_limpio = tel_db.split("@")[0] # Quitamos el @lid
+            
+        # Formateamos la fecha para quitar los milisegundos feos
+        fecha_limpia = str(f[6])[:16] if f[6] else ""
+            
+        resultado.append({
+            "id": f[0], "cliente_nombre": nombre_limpio, "telefono": tel_limpio,
+            "detalle": f[3], "total_unidades": f[4], "monto_total": f[5], "fecha": fecha_limpia,
+        })
+    return resultado
 
 
 def generar_excel_reporte(periodo: str = "dia") -> bytes:
@@ -798,7 +813,10 @@ def generar_excel_reporte(periodo: str = "dia") -> bytes:
         ws.cell(row=i, column=1, value=p["id"])
         ws.cell(row=i, column=2, value=p["cliente_nombre"])
         ws.cell(row=i, column=3, value=p["telefono"])
-        ws.cell(row=i, column=4, value=p["detalle"])
+        
+        celda_detalle = ws.cell(row=i, column=4, value=p["detalle"])
+        celda_detalle.alignment = Alignment(wrap_text=True) # <- Activa el salto de línea
+        
         ws.cell(row=i, column=5, value=p["total_unidades"])
         ws.cell(row=i, column=6, value=p["monto_total"])
         ws.cell(row=i, column=7, value=p["fecha"])
@@ -815,7 +833,8 @@ def generar_excel_reporte(periodo: str = "dia") -> bytes:
 
 def generar_pdf_reporte(periodo: str = "dia") -> bytes:
     from io import BytesIO
-    from reportlab.lib.pagesizes import letter
+    # 1. Agregamos "landscape" a las importaciones
+    from reportlab.lib.pagesizes import letter, landscape
     from reportlab.lib import colors
     from reportlab.lib.units import cm
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
@@ -826,7 +845,14 @@ def generar_pdf_reporte(periodo: str = "dia") -> bytes:
     etiquetas = {"dia": "Hoy", "semana": "Últimos 7 días", "mes": "Este mes"}
 
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=1.5 * cm, bottomMargin=1.5 * cm)
+    
+    # 2. Volteamos la hoja a horizontal (landscape) y reducimos los márgenes de los lados
+    doc = SimpleDocTemplate(
+        buffer, 
+        pagesize=landscape(letter), 
+        topMargin=1.5 * cm, bottomMargin=1.5 * cm,
+        leftMargin=1.0 * cm, rightMargin=1.0 * cm
+    )
     estilos = getSampleStyleSheet()
     elementos = []
 
@@ -845,13 +871,18 @@ def generar_pdf_reporte(periodo: str = "dia") -> bytes:
 
     datos = [["ID", "Cliente", "Teléfono", "Detalle", "Uds", "Monto", "Fecha"]]
     for p in pedidos:
+        # Mantenemos el salto de línea HTML que agregamos antes
+        detalle_html = p["detalle"].replace("\n", "<br/>")
         datos.append([
             str(p["id"]), p["cliente_nombre"], p["telefono"],
-            Paragraph(p["detalle"], estilos["Normal"]),
+            Paragraph(detalle_html, estilos["Normal"]),
             str(p["total_unidades"]), f"S/ {p['monto_total']:.2f}", p["fecha"],
         ])
 
-    tabla = Table(datos, colWidths=[1.3 * cm, 3 * cm, 2.8 * cm, 6.5 * cm, 1.3 * cm, 2.2 * cm, 3 * cm], repeatRows=1)
+    # 3. Ampliamos las columnas para usar todo el ancho de la hoja horizontal
+    # La columna del detalle ahora tiene 11.5 cm (antes tenía 6.5 cm)
+    tabla = Table(datos, colWidths=[1.2 * cm, 3.5 * cm, 2.5 * cm, 11.5 * cm, 1.2 * cm, 2.2 * cm, 3.5 * cm], repeatRows=1)
+    
     tabla.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2E7D32")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
