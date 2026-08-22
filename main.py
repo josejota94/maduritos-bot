@@ -451,9 +451,18 @@ def app_repartidor():
             }
 
             function tarjetaHTML(p) {
-                // 1. Limpiamos la basura de Baileys (@lid o @s.whatsapp.net)
-                const telLimpio = p.telefono.split('@')[0];
+                let nombreReal = p.cliente_nombre;
+                // Por defecto intenta usar el ID base
+                let telLimpio = p.telefono.split('@')[0];
                 
+                // Si el bot nos mandó el formato "Nombre | Numero"
+                if (p.cliente_nombre.includes(" | ")) {
+                    const partes = p.cliente_nombre.split(" | ");
+                    nombreReal = partes[0];
+                    // Quitamos letras o espacios por si escribió "mi cel es 999..."
+                    telLimpio = partes[1].replace(/[^0-9]/g, '');
+                }
+
                 return `
                 <div class="tarjeta">
                     <div class="fila">
@@ -461,15 +470,14 @@ def app_repartidor():
                         <span class="monto">S/ ${p.monto_total.toFixed(2)}</span>
                     </div>
                     <p style="margin:8px 0; color:#555;">
-                        <strong>Cliente:</strong> ${p.cliente_nombre} 
+                        <strong>Cliente:</strong> ${nombreReal} <br>
+                        <strong>Celular:</strong> ${telLimpio} 
                         (<a href="tel:+${telLimpio}" style="color:#00a884; font-weight:bold; text-decoration:none;">☎️ Llamar</a>)
                     </p>
-                    <!-- 2. Agregamos "white-space: pre-wrap" para que respete la lista hacia abajo -->
                     <p style="margin:8px 0; color:#555; white-space: pre-wrap;"><strong>Pedido:</strong>\n${p.detalle}</p>
                     <p style="margin:8px 0; color:#777; font-size:14px;">Distancia: ${p.distancia_km} km · ${p.fecha}</p>
                     <div class="acciones">
                         <a class="maps" href="${p.maps_url}" target="_blank">📍 Maps</a>
-                        <!-- 3. Botón nuevo para abrir el chat de WhatsApp directo -->
                         <a class="maps" href="https://wa.me/${telLimpio}" target="_blank" style="background:#25D366;">💬 WhatsApp</a>
                         <button class="entregar" onclick="entregar(${p.id})">✅ Entregado</button>
                     </div>
