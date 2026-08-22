@@ -60,6 +60,11 @@ Copia el archivo `.env.example` y renómbralo a `.env`. Ahí puedes cambiar:
   clic derecho sobre tu local → aparecen las coordenadas).
 - `RADIO_MAXIMO_KM`: qué tan lejos entregas.
 - `PEDIDO_MINIMO_UNIDADES`: el mínimo de maduritos por pedido.
+- `DIRECCION_LOCAL`: la dirección de tu local en texto (ej. "Jr. Lima cuadra 4,
+  frente al Banco BCP"). Se usa en dos mensajes automáticos: cuando alguien
+  pide fuera de tu rango de reparto (para invitarlo a recoger su pedido en
+  el local) y cuando el repartidor marca un pedido como "Entregado" (mensaje
+  de agradecimiento con tu dirección, para que no se olvide de ti).
 
 ## 4. Conectar WhatsApp real (cuando estés listo)
 
@@ -127,6 +132,33 @@ plan gratuito, suficiente para empezar).
 
 Una vez que tengas esta URL pública, también es el paso previo para conectar el
 WhatsApp real (Meta necesita una URL de internet, no puede apuntar a tu laptop).
+
+## 6b. Mejoras de esta última actualización
+
+- **Pedido más ordenado para el repartidor y la cocina**: antes el detalle
+  se guardaba como texto crudo ("grande queso_chicharron, grande queso..."),
+  ahora se agrupa y se muestra legible, ej.:
+  ```
+  2x Grande - Queso + Chicharrón
+  1x Mediano - Chicharrón
+  ```
+- **El bot ahora pide el nombre del cliente** justo después de la cantidad
+  ("¿A nombre de quién anotamos el pedido?"), para que el repartidor sepa a
+  quién llamar. El número de contacto sigue siendo el mismo WhatsApp del
+  cliente — en el panel `/repartidor` ahora es un enlace para llamar directo.
+- **Ya no se reinicia el pedido si el cliente solo agradece** ("gracias",
+  "genial", etc.) después de que su pedido quedó confirmado — el bot
+  responde que ya está en camino, en vez de volver a preguntar cuántos
+  maduritos quiere.
+- **Si la dirección está fuera de tu rango de reparto**, el mensaje ahora
+  también invita al cliente a recoger su pedido en tu local (usando
+  `DIRECCION_LOCAL`), para no perder esa venta.
+- **Mensaje automático al marcar "Entregado"**: el cliente recibe un
+  WhatsApp de agradecimiento con la dirección de tu local, tanto si usas
+  la API oficial de Meta como si usas WhatsApp por código QR (Baileys) —
+  para esto último, `whatsapp_qr.js` ahora también levanta un pequeño
+  servidor interno (puerto `BAILEYS_PUERTO`, por defecto 8088) que Python
+  usa para pedirle ese envío.
 
 ## 6. Mejoras que ya incluye esta versión (sobre la idea original)
 

@@ -16,6 +16,7 @@ WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "TOKEN_SECRETO_WEBHOOK")
 VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")
+BAILEYS_PUERTO = os.getenv("BAILEYS_PUERTO", "8088")
 
 app = FastAPI(title="Maduritos Asados - Bot de Pedidos")
 _static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -181,6 +182,27 @@ def enviar_mensaje_whatsapp(telefono, respuesta: dict):
         requests.post(url, json=payload, headers=headers, timeout=10)
     except Exception as e:
         print("Error enviando mensaje a WhatsApp:", e)
+
+
+def enviar_mensaje_baileys(telefono: str, texto: str):
+    """Manda un mensaje 'de la nada' (no como respuesta a algo que escribió
+    el cliente) por el canal de WhatsApp por QR — usado por ejemplo para
+    avisar 'gracias por tu compra' cuando el repartidor marca Entregado."""
+    try:
+        requests.post(
+            f"http://localhost:{BAILEYS_PUERTO}/enviar-mensaje",
+            json={"telefono": telefono, "texto": texto},
+            timeout=5,
+        )
+    except Exception as e:
+        print("[AVISO] No se pudo enviar por WhatsApp-QR (¿está corriendo whatsapp_qr.js?):", e)
+
+
+def notificar_cliente(telefono: str, respuesta: dict):
+    """Envía un mensaje espontáneo al cliente por los dos canales disponibles
+    (el oficial de Meta, si está configurado, y el de QR/Baileys)."""
+    enviar_mensaje_whatsapp(telefono, respuesta)
+    enviar_mensaje_baileys(telefono, respuesta.get("texto", ""))
 
 
 # ---------------------------------------------------------------------------
@@ -457,8 +479,8 @@ def app_repartidor():
                         <h3 style="margin:0; color:#333;">Orden #${p.id}</h3>
                         <span class="monto">S/ ${p.monto_total.toFixed(2)}</span>
                     </div>
-                    <p style="margin:8px 0; color:#555;"><strong>Cliente:</strong> ${p.cliente_nombre} (${p.telefono})</p>
-                    <p style="margin:8px 0; color:#555;"><strong>Pedido:</strong> ${p.detalle}</p>
+                    <p style="margin:8px 0; color:#555;"><strong>Cliente:</strong> ${p.cliente_nombre} — <a href="tel:${p.telefono}" style="color:#1a73e8;">${p.telefono}</a></p>
+                    <p style="margin:8px 0; color:#555; white-space:pre-line;"><strong>Pedido:</strong>\n${p.detalle}</p>
                     <p style="margin:8px 0; color:#777; font-size:14px;">Distancia: ${p.distancia_km} km · ${p.fecha}</p>
                     <div class="acciones">
                         <a class="maps" href="${p.maps_url}" target="_blank">Abrir Maps</a>
@@ -553,9 +575,15 @@ def app_repartidor():
 
 @app.post("/api/entregar/{pedido_id}")
 def marcar_entregado(pedido_id: int):
+    pedido = bl.obtener_pedido(pedido_id)
     with bl._lock:
         bl.cursor.execute("UPDATE pedidos SET estado = 'ENTREGADO' WHERE id = ?", (pedido_id,))
         bl.conn.commit()
+
+    if pedido and pedido["telefono"]:
+        texto = bl.mensaje_entregado(pedido["cliente_nombre"])
+        notificar_cliente(pedido["telefono"], {"tipo": "texto", "texto": texto})
+
     return {"status": "ok"}
 
 

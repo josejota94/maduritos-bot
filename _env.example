@@ -12,6 +12,14 @@ RADIO_MAXIMO_KM=4.0
 # Pedido mínimo de unidades para aceptar delivery
 PEDIDO_MINIMO_UNIDADES=3
 
+# Dirección de tu local (para cuando alguien queda fuera de rango, o para el
+# mensaje de "gracias" que se manda al marcar un pedido como Entregado)
+DIRECCION_LOCAL="Jr. Lima cuadra 4, frente al Banco BCP"
+
+# Puerto interno donde whatsapp_qr.js escucha para que Python le pida enviar
+# avisos espontáneos (ej. "gracias por tu compra"). No necesitas tocarlo.
+BAILEYS_PUERTO=8088
+
 # Datos de WhatsApp Business (Meta for Developers) - opcional, solo para producción
 WHATSAPP_TOKEN=
 PHONE_NUMBER_ID=

@@ -14,6 +14,10 @@ services:
         value: "4.0"
       - key: PEDIDO_MINIMO_UNIDADES
         value: "3"
+      - key: DIRECCION_LOCAL
+        value: "Jr. Lima cuadra 4, frente al Banco BCP"
+      - key: BAILEYS_PUERTO
+        value: "8088"
       - key: VERIFY_TOKEN
         value: "TOKEN_SECRETO_WEBHOOK"
       - key: WHATSAPP_TOKEN

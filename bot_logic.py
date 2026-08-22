@@ -12,6 +12,7 @@ LAT_LOCAL = float(os.getenv("LAT_LOCAL", "-6.0350"))
 LON_LOCAL = float(os.getenv("LON_LOCAL", "-76.9700"))
 RADIO_MAXIMO_KM = float(os.getenv("RADIO_MAXIMO_KM", "4.0"))
 PEDIDO_MINIMO_UNIDADES = int(os.getenv("PEDIDO_MINIMO_UNIDADES", "3"))
+DIRECCION_LOCAL = os.getenv("DIRECCION_LOCAL", "Jr. Lima cuadra 4, frente al Banco BCP")
 
 PRECIOS = {"mediano": 3.00, "grande": 4.00, "relleno_extra": 5.00}
 TAMANOS_TITULOS = {"mediano": "Mediano", "grande": "Grande", "relleno_extra": "Relleno Extra"}
@@ -264,6 +265,52 @@ def _resumen_carrito(carrito):
     )
 
 
+def _detalle_agrupado(carrito, con_precios=True):
+    """
+    Junta los maduritos iguales (mismo tamaño + relleno) y devuelve un texto
+    de varias líneas, tipo lista de cocina/despacho, ej.:
+        2x Grande - Queso + Chicharrón — S/ 8.00
+        1x Relleno Extra - Combinado (Queso + Maní + Chicharrón) — S/ 5.00
+    Mucho más claro para el repartidor y para pedirle a la cocinera que
+    "grande queso_chicharron, grande queso_chicharron, relleno_extra combinado".
+    Con `con_precios=True` (para el repartidor) cada línea trae su subtotal,
+    así sabe cuánto cobrar por cada grupo aunque el cliente pague por partes.
+    """
+    conteo = {}
+    orden = []
+    for c in carrito:
+        clave = (c["tamano"], c["relleno"])
+        if clave not in conteo:
+            conteo[clave] = {"cantidad": 0, "precio_unit": c["precio"]}
+            orden.append(clave)
+        conteo[clave]["cantidad"] += 1
+    lineas = []
+    for tamano, relleno in orden:
+        info = conteo[(tamano, relleno)]
+        cantidad = info["cantidad"]
+        nombre_tam = TAMANOS_TITULOS.get(tamano, tamano)
+        nombre_rel = RELLENOS_TITULOS.get(relleno, relleno)
+        linea = f"{cantidad}x {nombre_tam} - {nombre_rel}"
+        if con_precios:
+            subtotal = cantidad * info["precio_unit"]
+            linea += f" — S/ {subtotal:.2f}"
+        lineas.append(linea)
+    return "\n".join(lineas)
+
+
+_AGRADECIMIENTO_PALABRAS = {
+    "gracias", "muchas gracias", "grac", "gracias!", "muchisimas gracias",
+    "ok gracias", "genial", "perfecto", "excelente", "buenisimo", "de nada",
+}
+
+
+def _es_agradecimiento(texto: str) -> bool:
+    v = _normalizar(texto or "")
+    if v in _AGRADECIMIENTO_PALABRAS:
+        return True
+    return "gracias" in v and len(v) <= 40
+
+
 MENU_INTRO = (
     "¡Hola{saludo}! Bienvenido a *Maduritos Asados* 🍌🔥\n\n"
     "*Carta:*\n"
@@ -306,8 +353,16 @@ def procesar_mensaje(telefono: str, nombre: str, tipo: str, texto: str = None, l
         _borrar_sesion(telefono)
         return _texto("Tu pedido fue cancelado. Escribe cualquier mensaje para empezar de nuevo. 🙂")
 
-    # --- Sin sesión activa: mostrar menú y pedir cantidad ---
+    # --- Sin sesión activa ---
     if sesion is None:
+        # Si el cliente solo está agradeciendo/despidiéndose después de un
+        # pedido ya confirmado, no lo metemos de nuevo al flujo de "cuántos
+        # maduritos quieres" — respondemos amable y quedamos ahí.
+        if texto and _es_agradecimiento(texto):
+            return _texto(
+                "¡Con gusto! 🍌 Tu pedido ya fue tomado y está en camino. "
+                "Cualquier consulta, escríbenos por aquí."
+            )
         _guardar_sesion(telefono, nombre, "esperando_cantidad")
         return _pedir_cantidad(nombre)
 
@@ -353,8 +408,23 @@ def procesar_mensaje(telefono: str, nombre: str, tipo: str, texto: str = None, l
             )
             return resp
 
-        _guardar_sesion(telefono, nombre, "esperando_tamano", cantidad_total=cantidad, unidad_actual=1, carrito=[])
-        return _pedir_tamano(1, cantidad)
+        # Antes de armar el pedido, confirmamos el nombre del cliente (para que
+        # el repartidor sepa a quién llamar y a quién entregarle) — usamos el
+        # número de WhatsApp de siempre como número de contacto, no hace falta
+        # pedirlo aparte.
+        _guardar_sesion(telefono, nombre, "esperando_nombre", cantidad_total=cantidad, unidad_actual=1, carrito=[])
+        return _texto("¿A nombre de quién anotamos el pedido? (para que el repartidor te llame al llegar)")
+
+    # --- Paso 1b: nombre del cliente (para el repartidor) ---
+    if paso == "esperando_nombre":
+        nombre_cliente = (texto or "").strip()
+        if not nombre_cliente:
+            return _texto("¿A nombre de quién anotamos el pedido?")
+        _guardar_sesion(
+            telefono, nombre_cliente, "esperando_tamano",
+            cantidad_total=sesion["cantidad_total"], unidad_actual=1, carrito=[],
+        )
+        return _pedir_tamano(1, sesion["cantidad_total"])
 
     # --- Paso 2a: tamaño del maduro actual ---
     if paso == "esperando_tamano":
@@ -364,7 +434,7 @@ def procesar_mensaje(telefono: str, nombre: str, tipo: str, texto: str = None, l
             resp["texto"] = "No entendí esa opción. " + resp["texto"]
             return resp
         _guardar_sesion(
-            telefono, nombre, "esperando_relleno",
+            telefono, sesion["nombre"], "esperando_relleno",
             cantidad_total=sesion["cantidad_total"], unidad_actual=sesion["unidad_actual"],
             tamano_pendiente=valor, carrito=sesion["carrito"],
         )
@@ -385,7 +455,7 @@ def procesar_mensaje(telefono: str, nombre: str, tipo: str, texto: str = None, l
 
         if siguiente_unidad <= cantidad_total:
             _guardar_sesion(
-                telefono, nombre, "esperando_tamano",
+                telefono, sesion["nombre"], "esperando_tamano",
                 cantidad_total=cantidad_total, unidad_actual=siguiente_unidad,
                 carrito=carrito,
             )
@@ -393,7 +463,7 @@ def procesar_mensaje(telefono: str, nombre: str, tipo: str, texto: str = None, l
 
         total = sum(c["precio"] for c in carrito)
         _guardar_sesion(
-            telefono, nombre, "esperando_confirmacion",
+            telefono, sesion["nombre"], "esperando_confirmacion",
             cantidad_total=cantidad_total, unidad_actual=siguiente_unidad, carrito=carrito,
         )
         resumen = _resumen_carrito(carrito)
@@ -410,7 +480,7 @@ def procesar_mensaje(telefono: str, nombre: str, tipo: str, texto: str = None, l
             return _texto("Tu pedido fue cancelado. Escribe cualquier mensaje para empezar de nuevo. 🙂")
         if decision == "confirmar":
             _guardar_sesion(
-                telefono, nombre, "esperando_ubicacion",
+                telefono, sesion["nombre"], "esperando_ubicacion",
                 cantidad_total=sesion["cantidad_total"], carrito=sesion["carrito"],
             )
             return _texto(
@@ -434,13 +504,16 @@ def procesar_mensaje(telefono: str, nombre: str, tipo: str, texto: str = None, l
             _borrar_sesion(telefono)
             return _texto(
                 f"Lo sentimos, tu ubicación está a {distancia:.1f} km y nuestro rango máximo de delivery "
-                f"es de {RADIO_MAXIMO_KM} km. Escribe cualquier mensaje si deseas intentar con otra dirección."
+                f"es de {RADIO_MAXIMO_KM} km. 😔\n\n"
+                f"Mientras tanto puedes recogerlo tú mismo en nuestro local: {DIRECCION_LOCAL}. "
+                f"¡Pronto llegaremos más lejos! Escribe cualquier mensaje si deseas intentar con otra dirección."
             )
 
         carrito = sesion["carrito"]
+        cliente_nombre = sesion["nombre"] or nombre
         total_unidades = sesion["cantidad_total"]
         monto_total = sum(c["precio"] for c in carrito)
-        detalle = ", ".join(f"{c['tamano']} {c['relleno']}" for c in carrito)
+        detalle = _detalle_agrupado(carrito)
 
         with _lock:
             cursor.execute(
@@ -449,7 +522,7 @@ def procesar_mensaje(telefono: str, nombre: str, tipo: str, texto: str = None, l
                     (telefono, cliente_nombre, detalle, total_unidades, monto_total, latitud, longitud, distancia_km)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (telefono, nombre, detalle, total_unidades, monto_total, lat, lon, round(distancia, 2)),
+                (telefono, cliente_nombre, detalle, total_unidades, monto_total, lat, lon, round(distancia, 2)),
             )
             conn.commit()
 
@@ -459,12 +532,38 @@ def procesar_mensaje(telefono: str, nombre: str, tipo: str, texto: str = None, l
             f"{detalle}\n"
             f"Total: S/ {monto_total:.2f}\n"
             f"Distancia: {distancia:.1f} km\n\n"
-            f"Tu pedido está en camino. ¡Gracias por tu compra! 🍌"
+            f"Gracias, {cliente_nombre}. Tu pedido está en camino. 🍌\n\n"
+            f"_Si quieres agregar algo más, escríbelo y con gusto te ayudamos con un pedido nuevo._"
         )
 
     # Estado desconocido: reiniciar
     _borrar_sesion(telefono)
     return _pedir_cantidad(nombre)
+
+
+def obtener_pedido(pedido_id: int):
+    cursor.execute(
+        "SELECT id, telefono, cliente_nombre, detalle, monto_total, estado FROM pedidos WHERE id = ?",
+        (pedido_id,),
+    )
+    f = cursor.fetchone()
+    if not f:
+        return None
+    return {
+        "id": f[0], "telefono": f[1], "cliente_nombre": f[2],
+        "detalle": f[3], "monto_total": f[4], "estado": f[5],
+    }
+
+
+def mensaje_entregado(cliente_nombre: str) -> str:
+    """Mensaje de agradecimiento que se envía al cliente cuando el
+    repartidor marca su pedido como 'Entregado'."""
+    saludo = f"¡Gracias, {cliente_nombre}, " if cliente_nombre else "¡Gracias "
+    return (
+        f"{saludo}por disfrutar los ricos sabores de Maduritos Asados! 🍌🔥\n\n"
+        f"No olvides que estamos todos los días en {DIRECCION_LOCAL}.\n\n"
+        f"¡Pronto llegaremos más lejos y te esperamos de nuevo! 😊"
+    )
 
 
 # ---------------------------------------------------------------------------

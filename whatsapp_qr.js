@@ -19,11 +19,50 @@ const qrcodeImagen = require('qrcode');
 const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
+const http = require('http');
 
 const PUERTO_PYTHON = process.env.PORT || 8000;
 const URL_PYTHON = `http://localhost:${PUERTO_PYTHON}/api/baileys-webhook`;
+const PUERTO_PROPIO = process.env.BAILEYS_PUERTO || 8088;
 const CARPETA_STATIC = path.join(__dirname, 'static');
 const RUTA_QR = path.join(CARPETA_STATIC, 'qr_actual.png');
+
+// Referencia al socket activo de WhatsApp, para poder mandar mensajes que
+// NO son respuesta a algo que escribió el cliente (ej. "gracias por tu
+// compra" cuando el repartidor marca un pedido como Entregado). Python le
+// pega a un mini-servidor HTTP local (ver abajo) para pedir estos envíos.
+let _socketActivo = null;
+
+function iniciarServidorLocal() {
+    const servidor = http.createServer((req, res) => {
+        if (req.method !== 'POST' || req.url !== '/enviar-mensaje') {
+            res.writeHead(404);
+            return res.end();
+        }
+        let cuerpo = '';
+        req.on('data', (chunk) => { cuerpo += chunk; });
+        req.on('end', async () => {
+            try {
+                const { telefono, texto } = JSON.parse(cuerpo || '{}');
+                if (!_socketActivo || !telefono || !texto) {
+                    res.writeHead(503);
+                    return res.end(JSON.stringify({ status: 'no_disponible' }));
+                }
+                const jid = telefono.includes('@') ? telefono : `${telefono}@s.whatsapp.net`;
+                await _socketActivo.sendMessage(jid, { text: texto });
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ status: 'ok' }));
+            } catch (err) {
+                console.error('Error enviando mensaje espontáneo:', err.message);
+                res.writeHead(500);
+                res.end(JSON.stringify({ status: 'error' }));
+            }
+        });
+    });
+    servidor.listen(PUERTO_PROPIO, () => {
+        console.log(`📨 Servidor local de envíos (para avisos como "Entregado") en puerto ${PUERTO_PROPIO}`);
+    });
+}
 
 if (!fs.existsSync(CARPETA_STATIC)) fs.mkdirSync(CARPETA_STATIC, { recursive: true });
 
@@ -65,6 +104,7 @@ async function iniciarBot() {
         version,
         printQRInTerminal: false,
     });
+    _socketActivo = sock;
 
     sock.ev.on('creds.update', saveCreds);
 
@@ -81,6 +121,7 @@ async function iniciarBot() {
         }
 
         if (connection === 'close') {
+            _socketActivo = null;
             const codigo = lastDisconnect?.error?.output?.statusCode;
             const debeReconectar = codigo !== DisconnectReason.loggedOut;
             console.log('❌ Conexión cerrada.', debeReconectar ? 'Reintentando en 5s...' : 'Sesión cerrada (borra la carpeta sesion_whatsapp y vuelve a escanear el QR).');
@@ -135,4 +176,5 @@ async function iniciarBot() {
     });
 }
 
+iniciarServidorLocal();
 iniciarBot();
