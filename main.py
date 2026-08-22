@@ -380,6 +380,8 @@ def api_pedidos_pendientes():
     pendientes = bl.pedidos_pendientes()
     for p in pendientes:
         p["maps_url"] = f"https://www.google.com/maps/dir/?api=1&destination={p['latitud']},{p['longitud']}"
+        p["waze_url"] = f"https://waze.com/ul?ll={p['latitud']},{p['longitud']}&navigate=yes"
+        p["fecha_iso"] = p["fecha"].isoformat() if p["fecha"] else ""
     return {"pedidos": pendientes}
 
 
@@ -452,20 +454,23 @@ def app_repartidor():
 
             function tarjetaHTML(p) {
                 let nombreReal = p.cliente_nombre;
-                let telLimpio = p.telefono.split('@')[0]; // Por defecto usa el ID base
+                let telLimpio = p.telefono.split('@')[0];
                 let celParaLlamada = telLimpio;
                 let celParaWA = telLimpio;
                 
-                // Si el bot mandó el número validado
                 if (p.cliente_nombre.includes(" | ")) {
                     const partes = p.cliente_nombre.split(" | ");
                     nombreReal = partes[0];
                     telLimpio = partes[1].trim(); 
-                    
-                    // Configuramos para Perú
-                    celParaLlamada = telLimpio; // Llamada celular normal (ej: 987654321)
-                    celParaWA = "51" + telLimpio; // WhatsApp exige el código de país (ej: 51987654321)
+                    celParaLlamada = telLimpio; 
+                    celParaWA = "51" + telLimpio; 
                 }
+
+                // Cálculo del cronómetro
+                const fechaPedido = new Date(p.fecha_iso);
+                const ahora = new Date();
+                const mins = Math.floor((ahora - fechaPedido) / 60000);
+                const tiempoTxt = isNaN(mins) ? p.fecha : `⏱️ Esperando hace ${mins} min`;
 
                 return `
                 <div class="tarjeta">
@@ -478,22 +483,25 @@ def app_repartidor():
                         <strong>Celular:</strong> ${telLimpio} 
                     </p>
                     <p style="margin:8px 0; color:#555; white-space: pre-wrap;"><strong>Pedido:</strong>\n${p.detalle}</p>
-                    <p style="margin:8px 0; color:#777; font-size:14px;">Distancia: ${p.distancia_km} km · ${p.fecha}</p>
+                    <p style="margin:8px 0; color:#d32f2f; font-weight:bold; font-size:14px;">${tiempoTxt} · ${p.distancia_km} km</p>
                     
                     <div class="acciones">
-                        <!-- El botón Maps -->
                         <a class="maps" href="${p.maps_url}" target="_blank">📍 Maps</a>
-                        
-                        <!-- Llama por la línea del operador móvil (tel:) -->
+                        <a class="maps" href="${p.waze_url}" target="_blank" style="background:#33ccff; color:#003366;">🚗 Waze</a>
                         <a class="maps" href="tel:${celParaLlamada}" style="background:#007bff;">☎️ Llamar</a>
-                        
-                        <!-- Escribe por WhatsApp (wa.me) -->
-                        <a class="maps" href="https://wa.me/${celParaWA}" target="_blank" style="background:#25D366;">💬 Escribir</a>
+                        <a class="maps" href="https://wa.me/${celParaWA}" target="_blank" style="background:#25D366;">💬 Wpp</a>
                     </div>
                     <div class="acciones" style="margin-top:8px;">
-                        <button class="entregar" onclick="entregar(${p.id})" style="width:100%;">✅ Marcar como Entregado</button>
+                        <button class="entregar" onclick="confirmarEntrega(${p.id})" style="width:100%;">✅ Marcar como Entregado</button>
                     </div>
                 </div>`;
+            }
+
+            // Nueva función del seguro anti-dedazos
+            function confirmarEntrega(id) {
+                if (confirm(`¿Estás seguro de marcar la Orden #${id} como ENTREGADA?`)) {
+                    entregar(id);
+                }
             }
 
             async function actualizar() {
@@ -640,6 +648,7 @@ def caja_html(periodo: str = Query("dia")):
             .exportar a {{ flex:1; text-align:center; text-decoration:none; padding:12px; border-radius:10px; font-size:14px; font-weight:bold; }}
             .btn-excel {{ background:#1d6f42; color:#fff; }}
             .btn-pdf {{ background:#c0392b; color:#fff; }}
+            .ranking p {{ margin:6px 0; color:#555; font-size:15px; }}
         </style>
     </head>
     <body>
@@ -653,6 +662,14 @@ def caja_html(periodo: str = Query("dia")):
             <div class="label">Maduritos vendidos</div>
             <div class="num">{data['pedidos_entregados']}</div>
             <div class="label">Pedidos entregados</div>
+            
+            <div class="ranking" style="margin-top:20px; padding-top:15px; border-top:1px solid #eee;">
+                <h3 style="margin-top:0; color:#444; font-size:16px;">📊 Ranking de Insumos (Unidades)</h3>
+                <p>🧀 Queso: <b>{data['ranking'].get('Queso', 0)}</b></p>
+                <p>🥜 Maní: <b>{data['ranking'].get('Maní', 0)}</b></p>
+                <p>🥓 Chicharrón: <b>{data['ranking'].get('Chicharrón', 0)}</b></p>
+            </div>
+
             <div class="exportar">
                 <a class="btn-excel" href="/caja/exportar.xlsx?periodo={periodo}">⬇️ Excel</a>
                 <a class="btn-pdf" href="/caja/exportar.pdf?periodo={periodo}">⬇️ PDF</a>
