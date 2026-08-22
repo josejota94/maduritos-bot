@@ -2,13 +2,12 @@
 // Correr con: node whatsapp_qr.js
 // Necesita que tu servidor Python (main.py) ya esté corriendo.
 //
-// Envía las preguntas de cantidad/tamaño/relleno como BOTONES o LISTAS reales
-// de WhatsApp (igual que se ven en el /simulador), no como texto numerado.
-// Si el teléfono del cliente no logra mostrarlos como botones (pasa en
-// algunos WhatsApp viejos), se manda un texto de respaldo numerado, y este
-// mismo archivo se encarga de traducir una respuesta como "2" al id real
-// (ej. "tam_grande") antes de pasarla a Python — así nunca llega un número
-// suelto ambiguo al motor de conversación.
+// IMPORTANTE: se probó enviar botones/listas "reales" de WhatsApp por este
+// canal (Baileys, no oficial) y en la práctica WhatsApp los descarta en
+// silencio para muchas cuentas — el cliente no ve ninguna opción. Por eso
+// aquí SIEMPRE se muestran las opciones como texto numerado, bien claro,
+// dentro del mismo mensaje. El cliente puede responder con el número o
+// escribiendo la opción con sus propias palabras (ambas funcionan).
 
 if (typeof global.crypto === 'undefined') {
     global.crypto = require('crypto').webcrypto;
@@ -28,58 +27,31 @@ const RUTA_QR = path.join(CARPETA_STATIC, 'qr_actual.png');
 
 if (!fs.existsSync(CARPETA_STATIC)) fs.mkdirSync(CARPETA_STATIC, { recursive: true });
 
-// Por teléfono, guarda los ids de las opciones mostradas la ÚLTIMA VEZ que
-// tuvimos que recurrir al texto de respaldo numerado (no cuando los botones
-// reales funcionan, porque ahí la respuesta del cliente ya trae el id real).
-const _ultimasOpcionesRespaldo = {};
+// Por teléfono, guarda los ids de las opciones que se mostraron la última
+// vez, para poder traducir una respuesta numérica ("2") al id real que
+// espera bot_logic (ej. "tam_grande") antes de reenviarla a Python.
+const _ultimasOpciones = {};
+
+function construirTexto(respuesta) {
+    const opciones = respuesta.opciones || [];
+    if (opciones.length === 0) {
+        return respuesta.texto || '';
+    }
+    const lineas = [respuesta.texto, ''];
+    opciones.forEach((o, i) => lineas.push(`*${i + 1}.* ${o.titulo}`));
+    lineas.push(
+        '',
+        `👉 *Responde solo con el número* de tu opción (ejemplo: escribe *${1}* para elegir la primera).`
+    );
+    return lineas.join('\n');
+}
 
 async function enviarRespuesta(sock, jid, respuesta) {
-    const tipo = respuesta.tipo || 'texto';
-
-    if (tipo === 'texto' || !respuesta.opciones || respuesta.opciones.length === 0) {
-        await sock.sendMessage(jid, { text: respuesta.texto || '' });
-        return;
-    }
-
-    try {
-        if (tipo === 'botones') {
-            await sock.sendMessage(jid, {
-                text: respuesta.texto,
-                footer: 'Maduritos Asados 🍌',
-                buttons: respuesta.opciones.slice(0, 3).map((o) => ({
-                    buttonId: o.id,
-                    buttonText: { displayText: o.titulo },
-                    type: 1,
-                })),
-                headerType: 1,
-            });
-        } else if (tipo === 'lista') {
-            await sock.sendMessage(jid, {
-                text: respuesta.texto,
-                footer: 'Maduritos Asados 🍌',
-                title: 'Maduritos Asados',
-                buttonText: respuesta.boton_texto || 'Elegir',
-                sections: [
-                    {
-                        title: 'Opciones',
-                        rows: respuesta.opciones.slice(0, 10).map((o) => ({
-                            title: o.titulo,
-                            rowId: o.id,
-                        })),
-                    },
-                ],
-            });
-        }
-        // Si el envío con botones/lista funcionó, este teléfono ya no necesita
-        // el respaldo numerado — limpiamos cualquier rastro anterior.
-        delete _ultimasOpcionesRespaldo[jid];
-    } catch (err) {
-        console.error('⚠️  No se pudieron enviar botones/lista reales, uso texto de respaldo:', err.message);
-        const lineas = [respuesta.texto, ''];
-        respuesta.opciones.forEach((o, i) => lineas.push(`${i + 1}. ${o.titulo}`));
-        lineas.push('', 'Responde con el número de la opción.');
-        await sock.sendMessage(jid, { text: lineas.join('\n') });
-        _ultimasOpcionesRespaldo[jid] = respuesta.opciones.map((o) => o.id);
+    await sock.sendMessage(jid, { text: construirTexto(respuesta) });
+    if (respuesta.opciones && respuesta.opciones.length > 0) {
+        _ultimasOpciones[jid] = respuesta.opciones.map((o) => o.id);
+    } else {
+        delete _ultimasOpciones[jid];
     }
 }
 
@@ -135,17 +107,13 @@ async function iniciarBot() {
         if (msg.message.locationMessage) {
             lat = msg.message.locationMessage.degreesLatitude;
             lon = msg.message.locationMessage.degreesLongitude;
-        } else if (msg.message.buttonsResponseMessage) {
-            texto = msg.message.buttonsResponseMessage.selectedButtonId || '';
-        } else if (msg.message.listResponseMessage) {
-            texto = msg.message.listResponseMessage.singleSelectReply?.selectedRowId || '';
         } else {
             texto = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
 
             const crudo = texto.trim();
-            if (/^\d+$/.test(crudo) && _ultimasOpcionesRespaldo[jid]) {
+            if (/^\d+$/.test(crudo) && _ultimasOpciones[jid]) {
                 const indice = parseInt(crudo, 10) - 1;
-                const opcionesPrevias = _ultimasOpcionesRespaldo[jid];
+                const opcionesPrevias = _ultimasOpciones[jid];
                 if (indice >= 0 && indice < opcionesPrevias.length) {
                     texto = opcionesPrevias[indice];
                 }

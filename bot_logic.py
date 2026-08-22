@@ -128,6 +128,36 @@ def _valor_opcion(texto_o_id: str, prefijo: str) -> str:
     return v
 
 
+def _detectar_tamano(texto_o_id: str):
+    """
+    Reconoce el tamaño elegido, ya sea un id de botón (ej. 'tam_relleno_extra')
+    o texto libre escrito a mano (ej. 'Relleno Extra', con espacio en vez de
+    guion bajo). Devuelve la key de PRECIOS o None si no se reconoce nada.
+    """
+    v = _valor_opcion(texto_o_id or "", "tam_")
+    if v in PRECIOS:
+        return v
+    v_guion = v.replace(" ", "_")
+    if v_guion in PRECIOS:
+        return v_guion
+    return None
+
+
+_CONFIRMAR_PALABRAS = {"confirmar_pedido", "confirmar", "confirmo", "si", "sí", "s", "ok", "okay", "dale", "claro", "yes", "correcto", "va"}
+_CANCELAR_PALABRAS = {"cancelar_pedido", "cancelar", "cancelo", "no", "n", "cancela"}
+
+
+def _detectar_confirmacion(texto_o_id: str):
+    """Devuelve 'confirmar', 'cancelar' o None. Acepta el id del botón o
+    sinónimos comunes escritos a mano ('si', 'sí', 'ok', 'no', ...)."""
+    v = _normalizar(texto_o_id or "")
+    if v in _CANCELAR_PALABRAS:
+        return "cancelar"
+    if v in _CONFIRMAR_PALABRAS:
+        return "confirmar"
+    return None
+
+
 def _detectar_relleno(texto_o_id: str):
     """
     Reconoce el relleno elegido, ya sea:
@@ -328,8 +358,8 @@ def procesar_mensaje(telefono: str, nombre: str, tipo: str, texto: str = None, l
 
     # --- Paso 2a: tamaño del maduro actual ---
     if paso == "esperando_tamano":
-        valor = _valor_opcion(texto or "", "tam_")
-        if valor not in PRECIOS:
+        valor = _detectar_tamano(texto)
+        if not valor:
             resp = _pedir_tamano(sesion["unidad_actual"], sesion["cantidad_total"])
             resp["texto"] = "No entendí esa opción. " + resp["texto"]
             return resp
@@ -374,11 +404,11 @@ def procesar_mensaje(telefono: str, nombre: str, tipo: str, texto: str = None, l
 
     # --- Paso 3: confirmación antes de pedir ubicación ---
     if paso == "esperando_confirmacion":
-        valor = _valor_opcion(texto or "", "")
-        if "cancelar" in valor:
+        decision = _detectar_confirmacion(texto)
+        if decision == "cancelar":
             _borrar_sesion(telefono)
             return _texto("Tu pedido fue cancelado. Escribe cualquier mensaje para empezar de nuevo. 🙂")
-        if "confirmar" in valor:
+        if decision == "confirmar":
             _guardar_sesion(
                 telefono, nombre, "esperando_ubicacion",
                 cantidad_total=sesion["cantidad_total"], carrito=sesion["carrito"],
