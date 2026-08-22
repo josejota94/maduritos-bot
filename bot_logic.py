@@ -492,12 +492,17 @@ def procesar_mensaje(telefono: str, nombre: str, tipo: str, texto: str = None, l
 
     # --- NUEVO Paso 1c: número de contacto ---
     if paso == "esperando_contacto":
-        contacto = (texto or "").strip()
-        if not contacto:
-            return _texto("Por favor, escribe un número de celular para que el repartidor pueda contactarte.")
+        crudo = (texto or "").strip()
         
-        # Juntamos el nombre y el celular separados por " | "
-        nombre_con_celular = f"{sesion['nombre']} | {contacto}"
+        # Filtramos para quedarnos ÚNICAMENTE con los números (quita guiones, letras y espacios)
+        numero_limpio = "".join(c for c in crudo if c.isdigit())
+        
+        # Validar formato de Perú (empieza con 9 y tiene 9 dígitos exactos)
+        if len(numero_limpio) != 9 or not numero_limpio.startswith("9"):
+            return _texto("Ese número no parece válido. Por favor, asegúrate de escribir tu celular completo de 9 dígitos (ejemplo: 987654321).")
+        
+        # Juntamos el nombre y el celular validado
+        nombre_con_celular = f"{sesion['nombre']} | {numero_limpio}"
         
         _guardar_sesion(
             telefono, nombre_con_celular, "esperando_tamano",
