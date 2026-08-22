@@ -1,9 +1,10 @@
 import json
 import math
 import os
-import sqlite3
 import threading
 import unicodedata
+
+import psycopg2
 
 # ---------------------------------------------------------------------------
 # CONFIGURACIÓN DEL NEGOCIO (edita estos valores a tu gusto, o mejor en .env)
@@ -46,51 +47,82 @@ RELLENOS_TITULOS = {
     "combinado": "Combinado (Queso + Maní + Chicharrón)",
 }
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "pedidos_maduritos.db")
+# ---------------------------------------------------------------------------
+# BASE DE DATOS: Postgres, en vez del archivo SQLite de antes.
+#
+# El archivo SQLite (pedidos_maduritos.db) vivía SOLO dentro del contenedor
+# de Render. Como el plan free no tiene disco persistente y el servicio se
+# duerme/reinicia (inactividad, falta de memoria, redeploy), ese archivo se
+# borraba por completo en cada reinicio — junto con TODAS las conversaciones
+# en curso. Por eso el bot "se olvidaba" a mitad de un pedido y volvía a
+# mandar el saludo desde cero. Postgres vive fuera del contenedor, así que
+# sobrevive a los reinicios.
+#
+# DATABASE_URL debe apuntar a esa base (ver render.yaml).
+# ---------------------------------------------------------------------------
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+if not DATABASE_URL:
+    raise RuntimeError(
+        "Falta la variable de entorno DATABASE_URL — debe apuntar a tu base "
+        "de datos Postgres (revisa la configuración en Render)."
+    )
+
+if "sslmode=" not in DATABASE_URL:
+    _separador = "&" if "?" in DATABASE_URL else "?"
+    DATABASE_URL = f"{DATABASE_URL}{_separador}sslmode=require"
 
 _lock = threading.Lock()
-conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+conn = psycopg2.connect(DATABASE_URL)
+conn.autocommit = False
 cursor = conn.cursor()
 
-cursor.execute(
-    """
-    CREATE TABLE IF NOT EXISTS pedidos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        telefono TEXT,
-        cliente_nombre TEXT,
-        detalle TEXT,
-        total_unidades INTEGER,
-        monto_total REAL,
-        latitud REAL,
-        longitud REAL,
-        distancia_km REAL,
-        estado TEXT DEFAULT 'PENDIENTE',
-        fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+with _lock:
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pedidos (
+            id SERIAL PRIMARY KEY,
+            telefono TEXT,
+            cliente_nombre TEXT,
+            detalle TEXT,
+            total_unidades INTEGER,
+            monto_total REAL,
+            latitud REAL,
+            longitud REAL,
+            distancia_km REAL,
+            estado TEXT DEFAULT 'PENDIENTE',
+            fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
     )
-    """
-)
-cursor.execute(
-    """
-    CREATE TABLE IF NOT EXISTS sesiones (
-        telefono TEXT PRIMARY KEY,
-        nombre TEXT,
-        paso TEXT,
-        cantidad_total INTEGER,
-        unidad_actual INTEGER DEFAULT 0,
-        tamano_pendiente TEXT,
-        carrito TEXT
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sesiones (
+            telefono TEXT PRIMARY KEY,
+            nombre TEXT,
+            paso TEXT,
+            cantidad_total INTEGER,
+            unidad_actual INTEGER DEFAULT 0,
+            tamano_pendiente TEXT,
+            carrito TEXT
+        )
+        """
     )
-    """
-)
-conn.commit()
+    # Migración suave por si la tabla ya existía de una versión anterior
+    cursor.execute("ALTER TABLE sesiones ADD COLUMN IF NOT EXISTS unidad_actual INTEGER DEFAULT 0")
+    cursor.execute("ALTER TABLE sesiones ADD COLUMN IF NOT EXISTS tamano_pendiente TEXT")
 
-# Migración suave por si existía una base de datos de una versión anterior
-_columnas_sesiones = {c[1] for c in cursor.execute("PRAGMA table_info(sesiones)").fetchall()}
-if "unidad_actual" not in _columnas_sesiones:
-    cursor.execute("ALTER TABLE sesiones ADD COLUMN unidad_actual INTEGER DEFAULT 0")
-if "tamano_pendiente" not in _columnas_sesiones:
-    cursor.execute("ALTER TABLE sesiones ADD COLUMN tamano_pendiente TEXT")
-conn.commit()
+    # Tabla que main.py ya esperaba (bl.guardar_suscripcion_push /
+    # bl.eliminar_suscripcion_push) pero que no existía todavía.
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS suscripciones_push (
+            endpoint TEXT PRIMARY KEY,
+            p256dh TEXT,
+            auth TEXT
+        )
+        """
+    )
+    conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -215,12 +247,13 @@ def _detectar_relleno(texto_o_id: str):
 
 
 def _get_sesion(telefono):
-    cursor.execute(
-        "SELECT telefono, nombre, paso, cantidad_total, unidad_actual, tamano_pendiente, carrito "
-        "FROM sesiones WHERE telefono=?",
-        (telefono,),
-    )
-    row = cursor.fetchone()
+    with _lock:
+        cursor.execute(
+            "SELECT telefono, nombre, paso, cantidad_total, unidad_actual, tamano_pendiente, carrito "
+            "FROM sesiones WHERE telefono=%s",
+            (telefono,),
+        )
+        row = cursor.fetchone()
     if not row:
         return None
     return {
@@ -239,7 +272,7 @@ def _guardar_sesion(telefono, nombre, paso, cantidad_total=None, unidad_actual=0
         cursor.execute(
             """
             INSERT INTO sesiones (telefono, nombre, paso, cantidad_total, unidad_actual, tamano_pendiente, carrito)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT(telefono) DO UPDATE SET
                 nombre=excluded.nombre,
                 paso=excluded.paso,
@@ -255,7 +288,7 @@ def _guardar_sesion(telefono, nombre, paso, cantidad_total=None, unidad_actual=0
 
 def _borrar_sesion(telefono):
     with _lock:
-        cursor.execute("DELETE FROM sesiones WHERE telefono=?", (telefono,))
+        cursor.execute("DELETE FROM sesiones WHERE telefono=%s", (telefono,))
         conn.commit()
 
 
@@ -550,7 +583,7 @@ def procesar_mensaje(telefono: str, nombre: str, tipo: str, texto: str = None, l
                 """
                 INSERT INTO pedidos
                     (telefono, cliente_nombre, detalle, total_unidades, monto_total, latitud, longitud, distancia_km)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (telefono, cliente_nombre, detalle, total_unidades, monto_total, lat, lon, round(distancia, 2)),
             )
@@ -572,17 +605,47 @@ def procesar_mensaje(telefono: str, nombre: str, tipo: str, texto: str = None, l
 
 
 def obtener_pedido(pedido_id: int):
-    cursor.execute(
-        "SELECT id, telefono, cliente_nombre, detalle, monto_total, estado FROM pedidos WHERE id = ?",
-        (pedido_id,),
-    )
-    f = cursor.fetchone()
+    with _lock:
+        cursor.execute(
+            "SELECT id, telefono, cliente_nombre, detalle, monto_total, estado FROM pedidos WHERE id = %s",
+            (pedido_id,),
+        )
+        f = cursor.fetchone()
     if not f:
         return None
     return {
         "id": f[0], "telefono": f[1], "cliente_nombre": f[2],
         "detalle": f[3], "monto_total": f[4], "estado": f[5],
     }
+
+
+def marcar_entregado(pedido_id: int):
+    """Antes main.py tocaba bl.cursor directamente para esto. Se movió acá
+    para que toda la base de datos se maneje desde un solo lugar."""
+    with _lock:
+        cursor.execute("UPDATE pedidos SET estado = 'ENTREGADO' WHERE id = %s", (pedido_id,))
+        conn.commit()
+
+
+def guardar_suscripcion_push(endpoint: str, p256dh: str, auth: str):
+    with _lock:
+        cursor.execute(
+            """
+            INSERT INTO suscripciones_push (endpoint, p256dh, auth)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (endpoint) DO UPDATE SET
+                p256dh = excluded.p256dh,
+                auth = excluded.auth
+            """,
+            (endpoint, p256dh, auth),
+        )
+        conn.commit()
+
+
+def eliminar_suscripcion_push(endpoint: str):
+    with _lock:
+        cursor.execute("DELETE FROM suscripciones_push WHERE endpoint = %s", (endpoint,))
+        conn.commit()
 
 
 def mensaje_entregado(cliente_nombre: str) -> str:
@@ -600,14 +663,15 @@ def mensaje_entregado(cliente_nombre: str) -> str:
 # HISTORIAL Y REPORTES (idea: historial por cliente + reportes por periodo)
 # ---------------------------------------------------------------------------
 def historial_cliente(telefono: str):
-    cursor.execute(
-        """
-        SELECT id, detalle, total_unidades, monto_total, distancia_km, estado, fecha
-        FROM pedidos WHERE telefono = ? ORDER BY fecha DESC
-        """,
-        (telefono,),
-    )
-    filas = cursor.fetchall()
+    with _lock:
+        cursor.execute(
+            """
+            SELECT id, detalle, total_unidades, monto_total, distancia_km, estado, fecha
+            FROM pedidos WHERE telefono = %s ORDER BY fecha DESC
+            """,
+            (telefono,),
+        )
+        filas = cursor.fetchall()
     pedidos = [
         {
             "id": f[0], "detalle": f[1], "total_unidades": f[2], "monto_total": f[3],
@@ -621,18 +685,19 @@ def historial_cliente(telefono: str):
 
 def reporte_por_periodo(periodo: str = "dia"):
     condiciones = {
-        "dia": "date(fecha) = date('now')",
-        "semana": "date(fecha) >= date('now', '-6 days')",
-        "mes": "strftime('%Y-%m', fecha) = strftime('%Y-%m', 'now')",
+        "dia": "date(fecha) = CURRENT_DATE",
+        "semana": "date(fecha) >= CURRENT_DATE - INTERVAL '6 days'",
+        "mes": "to_char(fecha, 'YYYY-MM') = to_char(CURRENT_DATE, 'YYYY-MM')",
     }
     condicion = condiciones.get(periodo, condiciones["dia"])
-    cursor.execute(
-        f"""
-        SELECT COUNT(id), SUM(total_unidades), SUM(monto_total)
-        FROM pedidos WHERE estado = 'ENTREGADO' AND {condicion}
-        """
-    )
-    total_pedidos, total_maduros, total_dinero = cursor.fetchone()
+    with _lock:
+        cursor.execute(
+            f"""
+            SELECT COUNT(id), SUM(total_unidades), SUM(monto_total)
+            FROM pedidos WHERE estado = 'ENTREGADO' AND {condicion}
+            """
+        )
+        total_pedidos, total_maduros, total_dinero = cursor.fetchone()
     return {
         "periodo": periodo,
         "pedidos_entregados": total_pedidos or 0,
@@ -644,19 +709,20 @@ def reporte_por_periodo(periodo: str = "dia"):
 def pedidos_detallados_periodo(periodo: str = "dia"):
     """Detalle fila por fila de los pedidos ENTREGADOS de un periodo (para exportar)."""
     condiciones = {
-        "dia": "date(fecha) = date('now')",
-        "semana": "date(fecha) >= date('now', '-6 days')",
-        "mes": "strftime('%Y-%m', fecha) = strftime('%Y-%m', 'now')",
+        "dia": "date(fecha) = CURRENT_DATE",
+        "semana": "date(fecha) >= CURRENT_DATE - INTERVAL '6 days'",
+        "mes": "to_char(fecha, 'YYYY-MM') = to_char(CURRENT_DATE, 'YYYY-MM')",
     }
     condicion = condiciones.get(periodo, condiciones["dia"])
-    cursor.execute(
-        f"""
-        SELECT id, cliente_nombre, telefono, detalle, total_unidades, monto_total, fecha
-        FROM pedidos WHERE estado = 'ENTREGADO' AND {condicion}
-        ORDER BY fecha ASC
-        """
-    )
-    filas = cursor.fetchall()
+    with _lock:
+        cursor.execute(
+            f"""
+            SELECT id, cliente_nombre, telefono, detalle, total_unidades, monto_total, fecha
+            FROM pedidos WHERE estado = 'ENTREGADO' AND {condicion}
+            ORDER BY fecha ASC
+            """
+        )
+        filas = cursor.fetchall()
     return [
         {
             "id": f[0], "cliente_nombre": f[1] or "Sin nombre", "telefono": f[2],
@@ -780,13 +846,14 @@ def generar_pdf_reporte(periodo: str = "dia") -> bytes:
 
 
 def pedidos_pendientes():
-    cursor.execute(
-        """
-        SELECT id, cliente_nombre, telefono, detalle, monto_total, latitud, longitud, distancia_km, fecha
-        FROM pedidos WHERE estado = 'PENDIENTE' ORDER BY id ASC
-        """
-    )
-    filas = cursor.fetchall()
+    with _lock:
+        cursor.execute(
+            """
+            SELECT id, cliente_nombre, telefono, detalle, monto_total, latitud, longitud, distancia_km, fecha
+            FROM pedidos WHERE estado = 'PENDIENTE' ORDER BY id ASC
+            """
+        )
+        filas = cursor.fetchall()
     return [
         {
             "id": f[0], "cliente_nombre": f[1] or "Sin nombre", "telefono": f[2], "detalle": f[3],

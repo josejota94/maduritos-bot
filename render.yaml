@@ -31,4 +31,17 @@ services:
       - key: VAPID_CLAIM_EMAIL
         value: "mailto:tu_correo@ejemplo.com"
       - key: DATABASE_URL
-        sync: false
+        fromDatabase:
+          name: maduritos-db
+          property: connectionString
+
+# Base de datos Postgres administrada por Render. Reemplaza al archivo
+# SQLite local, que se borraba cada vez que el servicio se reiniciaba.
+#
+# OJO: en el plan "free", Render borra la base a los 90 días de haberla
+# creado (no por inactividad, simplemente cumplidos los 90 días) — hay que
+# crear una nueva a tiempo o pasar a un plan pago antes de esa fecha para no
+# perder tu historial de pedidos.
+databases:
+  - name: maduritos-db
+    plan: free
