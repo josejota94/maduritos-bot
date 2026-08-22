@@ -1,5 +1,5 @@
 import os
-from typing import Dict, Optional
+from typing import Optional
 
 import requests
 from dotenv import load_dotenv
@@ -26,13 +26,15 @@ app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 # ---------------------------------------------------------------------------
 # Canal alterno: Baileys (WhatsApp por código QR, no oficial). Útil para
 # probar HOY con clientes reales mientras arreglas el registro en Meta.
-# Guarda, por teléfono, las últimas opciones mostradas (botones/lista) para
-# poder traducir una respuesta numérica ("2") al id real que espera bot_logic
-# (ej. "tam_grande").
+#
+# A diferencia de antes, aquí YA NO se arma ningún texto numerado ("1. ...",
+# "2. ...") en Python. Este endpoint solo procesa el mensaje y devuelve la
+# respuesta tal cual la arma bot_logic (tipo: texto/botones/lista + opciones)
+# — es el lado de Node (whatsapp_qr.js) el que intenta mostrarlas como
+# botones/lista REALES de WhatsApp (como en el simulador), y solo si eso
+# falla arma un texto de respaldo, traduciendo la respuesta numérica él mismo
+# antes de volver a llamar aquí. Así este archivo no necesita adivinar nada.
 # ---------------------------------------------------------------------------
-_ultimas_opciones_baileys: Dict[str, list] = {}
-
-
 class BaileysMensaje(BaseModel):
     telefono: str
     nombre: str = ""
@@ -44,35 +46,10 @@ class BaileysMensaje(BaseModel):
 
 @app.post("/api/baileys-webhook")
 def baileys_webhook(msg: BaileysMensaje):
-    texto_entrante = (msg.texto or "").strip()
-
-    # Si el cliente respondió solo con un número, tradúcelo al id real de la
-    # última opción que le mostramos (ej. "2" -> "tam_grande") — EXCEPTO en el
-    # paso de cantidad, donde un número escrito a mano ya es la cantidad en sí
-    # ("quiero 3 maduritos"), no la posición de una opción de la lista.
-    sesion_actual = bl._get_sesion(msg.telefono)
-    paso_actual = sesion_actual["paso"] if sesion_actual else None
-    if texto_entrante.isdigit() and paso_actual != "esperando_cantidad" and msg.telefono in _ultimas_opciones_baileys:
-        opciones_previas = _ultimas_opciones_baileys[msg.telefono]
-        indice = int(texto_entrante) - 1
-        if 0 <= indice < len(opciones_previas):
-            texto_entrante = opciones_previas[indice]
-
     respuesta = bl.procesar_mensaje(
-        msg.telefono, msg.nombre, msg.tipo, texto=texto_entrante, lat=msg.lat, lon=msg.lon
+        msg.telefono, msg.nombre, msg.tipo, texto=(msg.texto or "").strip(), lat=msg.lat, lon=msg.lon
     )
-
-    partes = [respuesta.get("texto", "")]
-    opciones = respuesta.get("opciones")
-    if opciones:
-        _ultimas_opciones_baileys[msg.telefono] = [o["id"] for o in opciones]
-        for i, o in enumerate(opciones, start=1):
-            partes.append(f"{i}. {o['titulo']}")
-        partes.append("_Responde con el número, o escribe la opción con tus palabras._")
-    else:
-        _ultimas_opciones_baileys.pop(msg.telefono, None)
-
-    return JSONResponse({"texto": "\n".join(p for p in partes if p)})
+    return JSONResponse(respuesta)
 
 
 # ---------------------------------------------------------------------------

@@ -1,9 +1,15 @@
-// Conecta WhatsApp por código QR (Baileys, no oficial) con tu servidor Python.
+// Conecta WhatsApp por código QR (Baileys) con tu servidor Python.
 // Correr con: node whatsapp_qr.js
-// Necesita que tu servidor Python (main.py) ya esté corriendo en el puerto 8000.
+// Necesita que tu servidor Python (main.py) ya esté corriendo.
+//
+// Envía las preguntas de cantidad/tamaño/relleno como BOTONES o LISTAS reales
+// de WhatsApp (igual que se ven en el /simulador), no como texto numerado.
+// Si el teléfono del cliente no logra mostrarlos como botones (pasa en
+// algunos WhatsApp viejos), se manda un texto de respaldo numerado, y este
+// mismo archivo se encarga de traducir una respuesta como "2" al id real
+// (ej. "tam_grande") antes de pasarla a Python — así nunca llega un número
+// suelto ambiguo al motor de conversación.
 
-// Algunas versiones de Node no exponen "crypto" como objeto global (Baileys lo
-// necesita sí o sí). Este parche lo soluciona sin importar la versión de Node.
 if (typeof global.crypto === 'undefined') {
     global.crypto = require('crypto').webcrypto;
 }
@@ -15,16 +21,67 @@ const axios = require('axios');
 const path = require('path');
 const fs = require('fs');
 
-// Render asigna su propio puerto dinámico (variable PORT) para el servidor
-// Python — no siempre es 8000. Usamos el mismo puerto aquí para que coincidan
-// siempre, tanto en tu compu (donde no hay PORT y usa 8000 por defecto) como
-// en Render.
 const PUERTO_PYTHON = process.env.PORT || 8000;
 const URL_PYTHON = `http://localhost:${PUERTO_PYTHON}/api/baileys-webhook`;
 const CARPETA_STATIC = path.join(__dirname, 'static');
 const RUTA_QR = path.join(CARPETA_STATIC, 'qr_actual.png');
 
 if (!fs.existsSync(CARPETA_STATIC)) fs.mkdirSync(CARPETA_STATIC, { recursive: true });
+
+// Por teléfono, guarda los ids de las opciones mostradas la ÚLTIMA VEZ que
+// tuvimos que recurrir al texto de respaldo numerado (no cuando los botones
+// reales funcionan, porque ahí la respuesta del cliente ya trae el id real).
+const _ultimasOpcionesRespaldo = {};
+
+async function enviarRespuesta(sock, jid, respuesta) {
+    const tipo = respuesta.tipo || 'texto';
+
+    if (tipo === 'texto' || !respuesta.opciones || respuesta.opciones.length === 0) {
+        await sock.sendMessage(jid, { text: respuesta.texto || '' });
+        return;
+    }
+
+    try {
+        if (tipo === 'botones') {
+            await sock.sendMessage(jid, {
+                text: respuesta.texto,
+                footer: 'Maduritos Asados 🍌',
+                buttons: respuesta.opciones.slice(0, 3).map((o) => ({
+                    buttonId: o.id,
+                    buttonText: { displayText: o.titulo },
+                    type: 1,
+                })),
+                headerType: 1,
+            });
+        } else if (tipo === 'lista') {
+            await sock.sendMessage(jid, {
+                text: respuesta.texto,
+                footer: 'Maduritos Asados 🍌',
+                title: 'Maduritos Asados',
+                buttonText: respuesta.boton_texto || 'Elegir',
+                sections: [
+                    {
+                        title: 'Opciones',
+                        rows: respuesta.opciones.slice(0, 10).map((o) => ({
+                            title: o.titulo,
+                            rowId: o.id,
+                        })),
+                    },
+                ],
+            });
+        }
+        // Si el envío con botones/lista funcionó, este teléfono ya no necesita
+        // el respaldo numerado — limpiamos cualquier rastro anterior.
+        delete _ultimasOpcionesRespaldo[jid];
+    } catch (err) {
+        console.error('⚠️  No se pudieron enviar botones/lista reales, uso texto de respaldo:', err.message);
+        const lineas = [respuesta.texto, ''];
+        respuesta.opciones.forEach((o, i) => lineas.push(`${i + 1}. ${o.titulo}`));
+        lineas.push('', 'Responde con el número de la opción.');
+        await sock.sendMessage(jid, { text: lineas.join('\n') });
+        _ultimasOpcionesRespaldo[jid] = respuesta.opciones.map((o) => o.id);
+    }
+}
 
 async function iniciarBot() {
     const { state, saveCreds } = await useMultiFileAuthState('sesion_whatsapp');
@@ -34,7 +91,7 @@ async function iniciarBot() {
     const sock = makeWASocket({
         auth: state,
         version,
-        printQRInTerminal: false, // usamos qrcode-terminal manualmente para verlo más grande
+        printQRInTerminal: false,
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -66,16 +123,33 @@ async function iniciarBot() {
         if (type !== 'notify') return;
         const msg = messages[0];
         if (!msg.message || msg.key.fromMe) return;
-        if (msg.key.remoteJid?.endsWith('@g.us')) return; // ignora mensajes de grupos
+        if (msg.key.remoteJid?.endsWith('@g.us')) return;
 
-        const telefono = msg.key.remoteJid.replace('@s.whatsapp.net', '');
+        const jid = msg.key.remoteJid;
+        const telefono = jid.replace('@s.whatsapp.net', '');
         const nombre = msg.pushName || 'Cliente';
-        const texto = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
 
         let lat = null, lon = null;
+        let texto = '';
+
         if (msg.message.locationMessage) {
             lat = msg.message.locationMessage.degreesLatitude;
             lon = msg.message.locationMessage.degreesLongitude;
+        } else if (msg.message.buttonsResponseMessage) {
+            texto = msg.message.buttonsResponseMessage.selectedButtonId || '';
+        } else if (msg.message.listResponseMessage) {
+            texto = msg.message.listResponseMessage.singleSelectReply?.selectedRowId || '';
+        } else {
+            texto = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+
+            const crudo = texto.trim();
+            if (/^\d+$/.test(crudo) && _ultimasOpcionesRespaldo[jid]) {
+                const indice = parseInt(crudo, 10) - 1;
+                const opcionesPrevias = _ultimasOpcionesRespaldo[jid];
+                if (indice >= 0 && indice < opcionesPrevias.length) {
+                    texto = opcionesPrevias[indice];
+                }
+            }
         }
 
         try {
@@ -84,11 +158,11 @@ async function iniciarBot() {
                 tipo: lat !== null ? 'ubicacion' : 'texto',
             });
 
-            if (res.data && res.data.texto) {
-                await sock.sendMessage(msg.key.remoteJid, { text: res.data.texto });
+            if (res.data) {
+                await enviarRespuesta(sock, jid, res.data);
             }
         } catch (err) {
-            console.error('⚠️  Error al conectar con Python (¿está corriendo main.py en el puerto 8000?):', err.message);
+            console.error('⚠️  Error al conectar con Python (¿está corriendo main.py?):', err.message);
         }
     });
 }

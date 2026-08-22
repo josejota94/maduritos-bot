@@ -247,10 +247,13 @@ MENU_INTRO = (
 )
 
 
+def _opciones_cantidad():
+    return [("cant_3", "3 unidades"), ("cant_5", "5 unidades"), ("cant_otra", "Otra cantidad")]
+
+
 def _pedir_cantidad(nombre):
     msg = MENU_INTRO.format(saludo=f" {nombre}" if nombre else "") + "\n\n¿Cuántos maduritos en total deseas pedir?"
-    opciones_rapidas = [("cant_3", "3 unidades"), ("cant_5", "5 unidades"), ("cant_otra", "Otra cantidad")]
-    return _botones(msg, opciones_rapidas)
+    return _botones(msg, _opciones_cantidad())
 
 
 def procesar_mensaje(telefono: str, nombre: str, tipo: str, texto: str = None, lat: float = None, lon: float = None):
@@ -282,15 +285,35 @@ def procesar_mensaje(telefono: str, nombre: str, tipo: str, texto: str = None, l
 
     # --- Paso 1: cantidad total ---
     if paso == "esperando_cantidad":
-        valor = _valor_opcion(texto or "", "cant_")
+        crudo = (texto or "").strip()
+        valor = _valor_opcion(crudo, "cant_")
+        opciones = _opciones_cantidad()
+
         if valor == "otra":
             return _texto("Escribe el número total de maduritos que deseas pedir.")
+
+        cantidad = None
         if valor.isdigit():
             cantidad = int(valor)
-        elif texto and texto.strip().isdigit():
-            cantidad = int(texto.strip())
+        elif crudo.isdigit():
+            cantidad = int(crudo)
         else:
             return _pedir_cantidad(nombre)
+
+        # Corrección de ambigüedad: si un canal le muestra al cliente las
+        # opciones numeradas en texto plano ("1. 3 unidades / 2. 5 unidades /
+        # 3. Otra cantidad") y el cliente responde solo "1" pensando "elijo la
+        # opción 1", eso llega aquí como el número 1 suelto. Como una cantidad
+        # así de chica (menor al mínimo) de todas formas sería inválida por sí
+        # sola, y coincide con la posición de una opción ofrecida, asumimos que
+        # quiso decir "esa opción" en vez de rechazarlo como pedido inválido.
+        if cantidad < PEDIDO_MINIMO_UNIDADES and 1 <= cantidad <= len(opciones):
+            id_opcion = opciones[cantidad - 1][0]
+            if id_opcion == "cant_otra":
+                return _texto("Escribe el número total de maduritos que deseas pedir.")
+            valor_opcion = _valor_opcion(id_opcion, "cant_")
+            if valor_opcion.isdigit():
+                cantidad = int(valor_opcion)
 
         if cantidad < PEDIDO_MINIMO_UNIDADES:
             resp = _pedir_cantidad(nombre)
