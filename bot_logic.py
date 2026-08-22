@@ -715,16 +715,36 @@ def reporte_por_periodo(periodo: str = "dia"):
     with _lock:
         cursor.execute(
             f"""
-            SELECT COUNT(id), SUM(total_unidades), SUM(monto_total)
+            SELECT id, total_unidades, monto_total, detalle
             FROM pedidos WHERE estado = 'ENTREGADO' AND {condicion}
             """
         )
-        total_pedidos, total_maduros, total_dinero = cursor.fetchone()
+        filas = cursor.fetchall()
+
+    total_pedidos = len(filas)
+    total_maduros = sum(f[1] for f in filas)
+    total_dinero = sum(f[2] for f in filas)
+
+    # Nuevo: Contador de insumos para el ranking
+    ranking = {"Queso": 0, "Maní": 0, "Chicharrón": 0}
+    for f in filas:
+        detalle = (f[3] or "").lower()
+        for linea in detalle.split('\n'):
+            if 'x' in linea:
+                try:
+                    cant = int(linea.split('x')[0].strip())
+                    if 'queso' in linea: ranking['Queso'] += cant
+                    if 'maní' in linea or 'mani' in linea: ranking['Maní'] += cant
+                    if 'chicharrón' in linea or 'chicharron' in linea: ranking['Chicharrón'] += cant
+                except:
+                    pass
+
     return {
         "periodo": periodo,
-        "pedidos_entregados": total_pedidos or 0,
-        "maduritos_vendidos": total_maduros or 0,
-        "total_recaudado_soles": round(total_dinero or 0.0, 2),
+        "pedidos_entregados": total_pedidos,
+        "maduritos_vendidos": total_maduros,
+        "total_recaudado_soles": round(total_dinero, 2),
+        "ranking": ranking
     }
 
 
@@ -773,6 +793,8 @@ def generar_excel_reporte(periodo: str = "dia") -> bytes:
     from io import BytesIO
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment
+    # Importamos las herramientas para tablas oficiales
+    from openpyxl.worksheet.table import Table, TableStyleInfo
 
     pedidos = pedidos_detallados_periodo(periodo)
     resumen = reporte_por_periodo(periodo)
@@ -802,7 +824,7 @@ def generar_excel_reporte(periodo: str = "dia") -> bytes:
     for fila in (3, 4, 5):
         ws[f"A{fila}"].font = Font(name="Arial", bold=True)
 
-    encabezados = ["ID", "Cliente", "Teléfono", "Detalle", "Maduritos", "Monto (S/)", "Fecha"]
+    encabezados = ["ID", "Cliente", "Teléfono", "Detalle", "Maduritos", "Monto", "Fecha"]
     fila_encabezado = 7
     for col, titulo in enumerate(encabezados, start=1):
         celda = ws.cell(row=fila_encabezado, column=col, value=titulo)
@@ -813,10 +835,8 @@ def generar_excel_reporte(periodo: str = "dia") -> bytes:
         ws.cell(row=i, column=1, value=p["id"])
         ws.cell(row=i, column=2, value=p["cliente_nombre"])
         ws.cell(row=i, column=3, value=p["telefono"])
-        
         celda_detalle = ws.cell(row=i, column=4, value=p["detalle"])
-        celda_detalle.alignment = Alignment(wrap_text=True) # <- Activa el salto de línea
-        
+        celda_detalle.alignment = Alignment(wrap_text=True)
         ws.cell(row=i, column=5, value=p["total_unidades"])
         ws.cell(row=i, column=6, value=p["monto_total"])
         ws.cell(row=i, column=7, value=p["fecha"])
@@ -824,6 +844,13 @@ def generar_excel_reporte(periodo: str = "dia") -> bytes:
     anchos = [6, 18, 16, 40, 11, 12, 20]
     for col, ancho in enumerate(anchos, start=1):
         ws.column_dimensions[chr(64 + col)].width = ancho
+
+    # Aplicamos el formato de Tabla Inteligente de Excel
+    if pedidos:
+        tab = Table(displayName="DatosCaja", ref=f"A7:G{fila_encabezado + len(pedidos)}")
+        estilo_tabla = TableStyleInfo(name="TableStyleMedium9", showFirstColumn=False, showLastColumn=False, showRowStripes=True, showColumnStripes=False)
+        tab.tableStyleInfo = estilo_tabla
+        ws.add_table(tab)
 
     buffer = BytesIO()
     wb.save(buffer)
