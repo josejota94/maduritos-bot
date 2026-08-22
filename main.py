@@ -4,6 +4,8 @@ import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 import bot_logic as bl
 
@@ -12,8 +14,78 @@ load_dotenv()
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "TOKEN_SECRETO_WEBHOOK")
+VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY", "")
 
 app = FastAPI(title="Maduritos Asados - Bot de Pedidos")
+app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
+
+
+# ---------------------------------------------------------------------------
+# PWA: manifest, ícono y service worker (para "Agregar a pantalla de inicio"
+# y para que las notificaciones push funcionen aunque el navegador esté cerrado)
+# ---------------------------------------------------------------------------
+@app.get("/manifest.json")
+def manifest():
+    return JSONResponse({
+        "name": "Maduritos Asados - Repartidor",
+        "short_name": "Maduritos",
+        "start_url": "/repartidor",
+        "display": "standalone",
+        "background_color": "#f0f2f5",
+        "theme_color": "#00A884",
+        "icons": [
+            {"src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png"},
+            {"src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png"},
+        ],
+    })
+
+
+@app.get("/sw.js")
+def service_worker():
+    js = """
+self.addEventListener('push', function (event) {
+    let datos = {};
+    try { datos = event.data.json(); } catch (e) { datos = {titulo: 'Maduritos Asados', cuerpo: event.data ? event.data.text() : ''}; }
+    const titulo = datos.titulo || 'Maduritos Asados';
+    const opciones = {
+        body: datos.cuerpo || '',
+        icon: '/static/icon-192.png',
+        badge: '/static/icon-192.png',
+        data: { url: datos.url || '/repartidor' },
+        vibrate: [200, 100, 200],
+    };
+    event.waitUntil(self.registration.showNotification(titulo, opciones));
+});
+
+self.addEventListener('notificationclick', function (event) {
+    event.notification.close();
+    const url = (event.notification.data && event.notification.data.url) || '/repartidor';
+    event.waitUntil(clients.openWindow(url));
+});
+"""
+    return Response(content=js, media_type="application/javascript")
+
+
+class SuscripcionPush(BaseModel):
+    endpoint: str
+    keys: dict
+
+
+@app.get("/api/push/vapid-public-key")
+def vapid_public_key():
+    return {"publicKey": VAPID_PUBLIC_KEY}
+
+
+@app.post("/api/push/subscribe")
+def push_subscribe(sub: SuscripcionPush):
+    bl.guardar_suscripcion_push(sub.endpoint, sub.keys.get("p256dh", ""), sub.keys.get("auth", ""))
+    return {"status": "ok"}
+
+
+@app.post("/api/push/unsubscribe")
+def push_unsubscribe(sub: SuscripcionPush):
+    bl.eliminar_suscripcion_push(sub.endpoint)
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +360,9 @@ def app_repartidor():
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Repartidor - Despacho</title>
+        <link rel="manifest" href="/manifest.json">
+        <link rel="apple-touch-icon" href="/static/icon-192.png">
+        <meta name="theme-color" content="#00A884">
         <style>
             body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background:#f0f2f5; margin:0; padding:16px; }
             .tarjeta { background:#fff; border-radius:12px; padding:16px; margin-bottom:16px; box-shadow:0 2px 6px rgba(0,0,0,0.1); }
@@ -302,6 +377,10 @@ def app_repartidor():
     <body>
         <h2 style="color:#111;" id="titulo">📦 Pedidos por Entregar (...)</h2>
         <p id="estado-sonido">🔔 Activando avisos de sonido...</p>
+        <button id="btn-push" style="display:none; background:#00a884; color:#fff; border:none; padding:10px 16px; border-radius:8px; font-weight:bold; margin-bottom:14px; cursor:pointer;">
+            🔔 Activar notificaciones (aunque cierre el navegador)
+        </button>
+        <p id="estado-push" style="font-size:13px; color:#666;"></p>
         <div id="lista"></div>
         <script>
             let idsConocidos = new Set();
@@ -380,6 +459,57 @@ def app_repartidor():
                 await fetch('/api/entregar/' + id, { method: 'POST' });
                 actualizar();
             }
+
+            function urlBase64ToUint8Array(base64String) {
+                const padding = '='.repeat((4 - base64String.length % 4) % 4);
+                const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+                const rawData = window.atob(base64);
+                return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
+            }
+
+            async function configurarPush() {
+                const estadoPush = document.getElementById("estado-push");
+                if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+                    estadoPush.innerText = "Tu navegador no soporta notificaciones push (usa Chrome/Edge/Firefox reciente).";
+                    return;
+                }
+                const registro = await navigator.serviceWorker.register('/sw.js');
+                const suscripcionExistente = await registro.pushManager.getSubscription();
+                if (suscripcionExistente) {
+                    estadoPush.innerText = "🔔 Notificaciones push activadas en este dispositivo.";
+                    return;
+                }
+                const btn = document.getElementById("btn-push");
+                btn.style.display = "inline-block";
+                btn.onclick = async () => {
+                    try {
+                        const permiso = await Notification.requestPermission();
+                        if (permiso !== "granted") {
+                            estadoPush.innerText = "No diste permiso de notificaciones. Actívalo en los ajustes del navegador.";
+                            return;
+                        }
+                        const { publicKey } = await (await fetch('/api/push/vapid-public-key')).json();
+                        if (!publicKey) {
+                            estadoPush.innerText = "El servidor aún no tiene configuradas las llaves VAPID (revisa tu .env).";
+                            return;
+                        }
+                        const suscripcion = await registro.pushManager.subscribe({
+                            userVisibleOnly: true,
+                            applicationServerKey: urlBase64ToUint8Array(publicKey),
+                        });
+                        await fetch('/api/push/subscribe', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(suscripcion),
+                        });
+                        btn.style.display = "none";
+                        estadoPush.innerText = "🔔 Notificaciones push activadas en este dispositivo.";
+                    } catch (e) {
+                        estadoPush.innerText = "No se pudo activar la notificación push: " + e.message;
+                    }
+                };
+            }
+            configurarPush();
 
             actualizar();
             setInterval(actualizar, 5000);
@@ -529,6 +659,56 @@ def historial_html(telefono: str = Query(None)):
     """
 
 
+@app.get("/privacidad", response_class=HTMLResponse)
+def politica_privacidad():
+    return """
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Política de Privacidad - Maduritos Asados</title>
+        <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background:#f0f2f5; margin:0; padding:24px; color:#222; }
+            .card { background:#fff; border-radius:14px; padding:28px; max-width:640px; margin:0 auto; box-shadow:0 2px 8px rgba(0,0,0,0.1); line-height:1.6; }
+            h1 { color:#00A884; }
+            h2 { font-size:18px; margin-top:24px; }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>🍌 Política de Privacidad</h1>
+            <p>Maduritos Asados</p>
+
+            <h2>Qué datos recopilamos</h2>
+            <p>Cuando nos escribes por WhatsApp para hacer un pedido, guardamos: tu número de
+            teléfono, tu nombre (el que muestra WhatsApp), el detalle de tu pedido, el monto
+            total, y tu ubicación GPS únicamente para calcular si estás dentro de nuestra zona
+            de reparto.</p>
+
+            <h2>Para qué usamos tus datos</h2>
+            <p>Solo para procesar y entregar tu pedido, calcular tu total, verificar la zona
+            de reparto, y llevar un historial de tus pedidos anteriores por si vuelves a
+            escribirnos.</p>
+
+            <h2>Con quién compartimos tus datos</h2>
+            <p>No vendemos ni compartimos tus datos con nadie fuera de nuestro negocio. Solo
+            usamos la plataforma de WhatsApp Business (Meta) para poder enviarte y recibir
+            mensajes, según los términos de esa plataforma.</p>
+
+            <h2>Cuánto tiempo guardamos tus datos</h2>
+            <p>Guardamos el historial de tus pedidos mientras seas cliente activo. Puedes
+            pedirnos en cualquier momento, por WhatsApp, que eliminemos tu información.</p>
+
+            <h2>Contacto</h2>
+            <p>Si tienes preguntas sobre tus datos, escríbenos directamente por WhatsApp al
+            número de este negocio.</p>
+        </div>
+    </body>
+    </html>
+    """
+
+
 @app.get("/")
 def raiz():
     return {
@@ -537,4 +717,5 @@ def raiz():
         "panel_repartidor": "/repartidor",
         "caja": "/caja",
         "historial": "/historial",
+        "politica_privacidad": "/privacidad",
     }
