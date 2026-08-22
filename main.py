@@ -1,4 +1,5 @@
 import os
+from typing import Dict, Optional
 
 import requests
 from dotenv import load_dotenv
@@ -20,6 +21,58 @@ app = FastAPI(title="Maduritos Asados - Bot de Pedidos")
 _static_dir = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(_static_dir, exist_ok=True)  # evita que el servidor no arranque si faltó subir esta carpeta
 app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+
+
+# ---------------------------------------------------------------------------
+# Canal alterno: Baileys (WhatsApp por código QR, no oficial). Útil para
+# probar HOY con clientes reales mientras arreglas el registro en Meta.
+# Guarda, por teléfono, las últimas opciones mostradas (botones/lista) para
+# poder traducir una respuesta numérica ("2") al id real que espera bot_logic
+# (ej. "tam_grande").
+# ---------------------------------------------------------------------------
+_ultimas_opciones_baileys: Dict[str, list] = {}
+
+
+class BaileysMensaje(BaseModel):
+    telefono: str
+    nombre: str = ""
+    tipo: str = "texto"
+    texto: str = ""
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+
+
+@app.post("/api/baileys-webhook")
+def baileys_webhook(msg: BaileysMensaje):
+    texto_entrante = (msg.texto or "").strip()
+
+    # Si el cliente respondió solo con un número, tradúcelo al id real de la
+    # última opción que le mostramos (ej. "2" -> "tam_grande") — EXCEPTO en el
+    # paso de cantidad, donde un número escrito a mano ya es la cantidad en sí
+    # ("quiero 3 maduritos"), no la posición de una opción de la lista.
+    sesion_actual = bl._get_sesion(msg.telefono)
+    paso_actual = sesion_actual["paso"] if sesion_actual else None
+    if texto_entrante.isdigit() and paso_actual != "esperando_cantidad" and msg.telefono in _ultimas_opciones_baileys:
+        opciones_previas = _ultimas_opciones_baileys[msg.telefono]
+        indice = int(texto_entrante) - 1
+        if 0 <= indice < len(opciones_previas):
+            texto_entrante = opciones_previas[indice]
+
+    respuesta = bl.procesar_mensaje(
+        msg.telefono, msg.nombre, msg.tipo, texto=texto_entrante, lat=msg.lat, lon=msg.lon
+    )
+
+    partes = [respuesta.get("texto", "")]
+    opciones = respuesta.get("opciones")
+    if opciones:
+        _ultimas_opciones_baileys[msg.telefono] = [o["id"] for o in opciones]
+        for i, o in enumerate(opciones, start=1):
+            partes.append(f"{i}. {o['titulo']}")
+        partes.append("_Responde con el número, o escribe la opción con tus palabras._")
+    else:
+        _ultimas_opciones_baileys.pop(msg.telefono, None)
+
+    return JSONResponse({"texto": "\n".join(p for p in partes if p)})
 
 
 # ---------------------------------------------------------------------------
@@ -656,6 +709,43 @@ def historial_html(telefono: str = Query(None)):
         </form>
         {resumen}
         {'<table><tr><th>Orden</th><th>Fecha</th><th>Detalle</th><th>Monto</th><th>Estado</th></tr>' + filas + '</table>' if telefono else ''}
+    </body>
+    </html>
+    """
+
+
+@app.get("/qr", response_class=HTMLResponse)
+def ver_qr():
+    ruta_qr = os.path.join(_static_dir, "qr_actual.png")
+    if os.path.exists(ruta_qr):
+        cuerpo = """
+        <h2>📱 Escanea este QR con WhatsApp</h2>
+        <p>Configuración → Dispositivos vinculados → Vincular un dispositivo</p>
+        <img src="/static/qr_actual.png" style="width:320px; border:8px solid #fff; border-radius:12px;">
+        <p style="color:#888; font-size:13px;">Esta página se actualiza sola cada 5 segundos.</p>
+        """
+    else:
+        cuerpo = """
+        <h2>✅ Ya está conectado (o aún generando el QR)</h2>
+        <p>Si acabas de reiniciar el servicio, espera unos segundos y recarga.
+        Si no aparece nunca un QR aquí y tampoco responde el bot, revisa los
+        Logs de Render por algún error.</p>
+        """
+    return f"""
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta http-equiv="refresh" content="5">
+        <title>Vincular WhatsApp - Maduritos Asados</title>
+        <style>
+            body {{ font-family: -apple-system, BlinkMacSystemFont, sans-serif; background:#111b21; color:#fff; margin:0; padding:24px; text-align:center; }}
+            img {{ margin: 16px 0; }}
+        </style>
+    </head>
+    <body>
+        {cuerpo}
     </body>
     </html>
     """

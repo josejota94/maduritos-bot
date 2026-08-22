@@ -9,10 +9,17 @@ if (typeof global.crypto === 'undefined') {
 }
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
-const qrcode = require('qrcode-terminal');
+const qrcodeTerminal = require('qrcode-terminal');
+const qrcodeImagen = require('qrcode');
 const axios = require('axios');
+const path = require('path');
+const fs = require('fs');
 
 const URL_PYTHON = 'http://localhost:8000/api/baileys-webhook';
+const CARPETA_STATIC = path.join(__dirname, 'static');
+const RUTA_QR = path.join(CARPETA_STATIC, 'qr_actual.png');
+
+if (!fs.existsSync(CARPETA_STATIC)) fs.mkdirSync(CARPETA_STATIC, { recursive: true });
 
 async function iniciarBot() {
     const { state, saveCreds } = await useMultiFileAuthState('sesion_whatsapp');
@@ -29,7 +36,11 @@ async function iniciarBot() {
 
         if (qr) {
             console.log('\n📱 Escanea este código QR con tu WhatsApp (Dispositivos vinculados):\n');
-            qrcode.generate(qr, { small: true });
+            qrcodeTerminal.generate(qr, { small: true });
+            qrcodeImagen.toFile(RUTA_QR, qr, { width: 400 }, (err) => {
+                if (err) console.error('No se pudo guardar la imagen del QR:', err.message);
+                else console.log('🖼️  QR también disponible como imagen en /qr');
+            });
         }
 
         if (connection === 'close') {
@@ -39,6 +50,7 @@ async function iniciarBot() {
             if (debeReconectar) iniciarBot();
         } else if (connection === 'open') {
             console.log('✅ ¡WhatsApp conectado exitosamente por QR!');
+            if (fs.existsSync(RUTA_QR)) fs.unlinkSync(RUTA_QR);
         }
     });
 
