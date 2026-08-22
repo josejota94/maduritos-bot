@@ -2,6 +2,12 @@
 // Correr con: node whatsapp_qr.js
 // Necesita que tu servidor Python (main.py) ya esté corriendo en el puerto 8000.
 
+// Algunas versiones de Node no exponen "crypto" como objeto global (Baileys lo
+// necesita sí o sí). Este parche lo soluciona sin importar la versión de Node.
+if (typeof global.crypto === 'undefined') {
+    global.crypto = require('crypto').webcrypto;
+}
+
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
 const axios = require('axios');
